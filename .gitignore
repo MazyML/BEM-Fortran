@@ -1,0 +1,44 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Temporary files
+tmp/
+*.tmp
+*.log
+
+# Generated outputs
+outputs/
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Fortran build products
+*.o
+*.mod
+*.smod
+bilge-hole
+
+# Generated BEM simulation and movie artifacts
+movie-output/*
+!movie-output/BILGE-DADE.TXT
+!movie-output/make_movie.py
