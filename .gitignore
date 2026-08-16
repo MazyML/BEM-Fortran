@@ -37,8 +37,12 @@ Thumbs.db
 *.mod
 *.smod
 bilge-hole
+wall-cavitation
 
 # Generated BEM simulation and movie artifacts
 movie-output/*
 !movie-output/BILGE-DADE.TXT
 !movie-output/make_movie.py
+
+# Flat-wall case outputs (source, input, and renderer live at repo root)
+wall-output/
