@@ -19,3 +19,8 @@ DTIME.TXT
 GEOMETRY.TXT
 RATIO*.TXT
 VOLT*.TXT
+
+# Plain-wall case outputs
+wall-output/
+wall-cavitation.avi
+wall-cavitation-preview.png
