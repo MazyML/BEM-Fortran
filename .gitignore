@@ -1,0 +1,21 @@
+# Local compiler/video tools
+.tools/
+
+# Temporary builds and simulation runs
+build/
+run/
+
+# Compiled artifacts
+*.exe
+*.obj
+*.pdb
+*.dll
+
+# Solver-generated Tecplot and history files
+*.plt
+*.PLT
+CENT*.TXT
+DTIME.TXT
+GEOMETRY.TXT
+RATIO*.TXT
+VOLT*.TXT
