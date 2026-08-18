@@ -25,23 +25,26 @@ C     ********************************************************************
       COMMON/SPLR/AR,BR,CR,DR
       COMMON/SPLZ/AZ,BZ,CZ,DZ
       COMMON/GAUSS10/AAAA,XXXX
-      PARAMETER (DWFI=600/2)
-      PARAMETER (DWFJ=1410/2)
-      PARAMETER (DWDI=0.01)
-      PARAMETER (DWDJ=0.01)
+
+C=======================================================================
+C     EXTERIOR LIQUID FLOW-FIELD SETTINGS
+C     Coordinates and potentials are nondimensional.  FIELD_CALC_EVERY
+C     defaults to one because Bernoulli pressure is most accurate from
+C     consecutive accepted states.  Output is intentionally less frequent.
+C=======================================================================
+      PARAMETER (NFR=161,NFZ=161)
+      LOGICAL FIELD_ENABLED
+      PARAMETER (FIELD_ENABLED=.TRUE.)
+      INTEGER FIELD_CALC_EVERY,FIELD_OUTPUT_EVERY
+      PARAMETER (FIELD_CALC_EVERY=1,FIELD_OUTPUT_EVERY=10)
+      PARAMETER (FIELD_INVALID=-1.0D30)
 
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),FI(NPA),
      *          PSIS(NPA),UCP(NPA),VCP(NPA),UEP(NPA),VEP(NPA),
      *          VM(NPA),ALF(NPA),BET(NPA),TET(NPA),
      *          RX(NPA),ZX(NPA),B(NPA,NPA),FID(NPA),
      *          FID1(NPA),DFD(NPA),DFITD(NPA),
-     *          G1(NPA),G2(NPA),FDDW(999999),
-     *          FIPQ(999999),DRR(999,999),PPDW(999999),
-     *          DZZ(999,999),RNIM(999999),ZNIM(999999),DFDDW(999,999),
-     *          X1(999999),Y1(999999),FIQ(5,999999),FIP(5,999999),
-     *          DUDW(999,999),DVDW(999,999),UVDW(999,999),XYB(5,999999),
-     *          ZA(5,999),XYC(5,999999),PDW(999,999),DFDDW1(999,999),
-     *          DUVDW(999999)
+     *          G1(NPA),G2(NPA)
       DIMENSION RN(NPA),ZN(NPA),UB(NPA),VB(NPA)
       DIMENSION RYP(NPA),RYM(NPA),ZYP(NPA),ZYM(NPA)
       DIMENSION A(NPA,NPA),PSI(NPA)
@@ -70,7 +73,14 @@ C     ********************************************************************
       DIMENSION APSI(NPA),BPSI(NPA),CPSI(NPA),DPSI(NPA)
       DIMENSION UL1(NPA),VL1(NPA),UL2(NPA),VL2(NPA)
       DIMENSION XXXX(24),AAAA(24)
-      DIMENSION PSICS(NPA)  
+      DIMENSION PSICS(NPA),FIDWALL(NPA)
+      DIMENSION RFIELD(NFR),ZFIELD(NFZ)
+      DIMENSION PHIFIELD(NFR,NFZ),PHIPREV(NFR,NFZ)
+      DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
+      DIMENSION UMAGFIELD(NFR,NFZ),PSTARFIELD(NFR,NFZ)
+      DIMENSION PPAFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ),FIELD_MASK_PREV(NFR,NFZ)
+      LOGICAL FIELD_HAVE_PREV,FIELD_PRESSURE_READY
 CSAL      OPEN(UNIT=9,FILE='DJA.SCR',STATUS='OLD')
 CSAL      OPEN(UNIT=10,FILE='DADEXCYB',STATUS='OLD')
 CSAL      OPEN(UNIT=39,FILE='DADEMB',STATUS='OLD')
@@ -265,6 +275,21 @@ C     FLAT RIGID WALL: ZERO NORMAL VELOCITY ON Z=0.
       VEP(J)=0.0
 13553 CONTINUE
       DTIME=0.0
+      FIELD_HAVE_PREV=.FALSE.
+      FIELD_TIME_PREV=0.0D0
+      IF (FIELD_ENABLED) THEN
+      RFIELD_MIN=0.0D0
+      RFIELD_MAX=DMIN1(WALLR,4.0D0*R0D)
+      ZFIELD_MIN=0.0D0
+      ZFIELD_MAX=HPRIME+3.0D0*R0D
+      CALL BUILD_WALL_FLOW_GRID(RFIELD,ZFIELD,NFR,NFZ,
+     &RFIELD_MIN,RFIELD_MAX,ZFIELD_MIN,ZFIELD_MAX,DRFIELD,DZFIELD)
+      FIELD_CLEARANCE=1.5D0*DMAX1(DRFIELD,DZFIELD)
+      OPEN(UNIT=310,FILE='WALL-FLOW-FIELD.plt',STATUS='REPLACE')
+      WRITE(310,*)'TITLE="Exterior liquid flow field"'
+      WRITE(310,*)'VARIABLES="R","Z","PHI","UR","UZ",',
+     &'"UMAG","PSTAR","P_PA","MASK"'
+      ENDIF
 CSAL      WRITE(31,1031)PCOM(M+1),PSICS(M+1),Z(M+2)
 CSAL      IF (K.LE.200) GO TO 1220
 CSAL      DO  4100  J=1,M
@@ -418,6 +443,44 @@ CCC	DO  603  I=M+1,MVL
 CSAL      WRITE(23,1223) FIDC(I,K)
  603  CONTINUE
  1223 FORMAT (1X,6F16.4)
+C=======================================================================
+C     EXTERIOR LIQUID FLOW-FIELD POST-PROCESSING
+C
+C     ILS=1 is the Eulerian BEM solve on the last accepted geometry.
+C     At this point FID, PSI, FIDC(:,K), PSICS, and R/Z all belong to
+C     DTIME.  DTIME is not advanced to the predictor time until below,
+C     after the velocity reconstruction and adaptive-step calculation.
+C=======================================================================
+      IF (FIELD_ENABLED.AND.ILS.EQ.1) THEN
+      IF (MOD(K-1,FIELD_CALC_EVERY).EQ.0) THEN
+      FIELD_TIME_CURRENT=DTIME
+      DO 604 J=M+1,MHL
+      FIDWALL(J)=FIDC(J,K)
+ 604  CONTINUE
+      CALL BUILD_FLOW_MASK(R,Z,M,RFIELD,ZFIELD,NFR,NFZ,
+     &RFIELD_MIN,RFIELD_MAX,ZFIELD_MIN,ZFIELD_MAX,FIELD_CLEARANCE,
+     &FIELD_MASK)
+      CALL EVALUATE_FLOW_POTENTIAL(DL,R,Z,FID,PSI,FIDWALL,PSICS,
+     &M,MHL,RFIELD,ZFIELD,NFR,NFZ,FIELD_MASK,PHIFIELD,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX,FIELD_INVALID)
+      CALL CALCULATE_FLOW_VELOCITY(PHIFIELD,RFIELD,ZFIELD,NFR,NFZ,
+     &FIELD_MASK,URFIELD,UZFIELD,UMAGFIELD,FIELD_INVALID)
+      CALL CALCULATE_FLOW_PRESSURE(PHIFIELD,PHIPREV,URFIELD,
+     &UZFIELD,FIELD_MASK,FIELD_MASK_PREV,NFR,NFZ,
+     &FIELD_TIME_CURRENT,FIELD_TIME_PREV,FIELD_HAVE_PREV,PC,P1INF,
+     &PSTARFIELD,PPAFIELD,FIELD_PRESSURE_READY,FIELD_INVALID)
+      IF (K.EQ.1.OR.MOD(K,FIELD_OUTPUT_EVERY).EQ.0) THEN
+      CALL WRITE_WALL_FLOW_ZONE(310,K,FIELD_TIME_CURRENT,RFIELD,
+     &ZFIELD,NFR,NFZ,PHIFIELD,URFIELD,UZFIELD,UMAGFIELD,
+     &PSTARFIELD,PPAFIELD,FIELD_MASK,FIELD_PRESSURE_READY,
+     &FIELD_INVALID)
+      ENDIF
+      CALL STORE_FLOW_SNAPSHOT(PHIFIELD,FIELD_MASK,NFR,NFZ,
+     &PHIPREV,FIELD_MASK_PREV)
+      FIELD_TIME_PREV=FIELD_TIME_CURRENT
+      FIELD_HAVE_PREV=.TRUE.
+      ENDIF
+      ENDIF
       DO  502  J=1,M
       DRDXI(J)=BR(J)+2.*CR(J)*(DLM(J)-DL(J))
      &+3.*DR(J)*((DLM(J)-DL(J))**2)
@@ -890,165 +953,13 @@ cd      ENDIF
 C----SALEKI---))
 C	Dawoodian
 
-CAWOODIAN((&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
-      IF (.FALSE.) THEN
-
-      IF(K==1.OR.K==47.OR.K==82.OR.K==137.OR.K==151.OR.
-     &K==214.OR.K==218.OR.
-     &K==2.OR.K==48.OR.K==83.OR.K==138.OR.K==152.OR.
-     &K==215.OR.K==219) THEN
-
-c	CALL COP1 (R,Z,RNIM,ZNIM,M,MHU,MCU,MOB,MCL,MHL,RM,FIP,KK
-c  	& ,XYB,ZA,DWFI,DWFJ,DWDI,DWDJ,RCUD,RCLD,THICK)
-     
-      DO I=1,KK
-      IF (FIP(3,I)==1) THEN
-      FIPQ(I)=1
-      else
-      FIPQ(I)=0
-      END IF
-      END DO
-
-C	DO I=1,KK
-C	DO J=1,MN+122
-C	IF (FIP(1,I)==XYB(1,J) .AND. FIP(2,I)==XYB(2,J)) THEN
-C	FIPQ(I)=0
-C	END IF
-C	END DO
-C	END DO
-
-     
-      CALL DAWOODIAN_FFD (DL,R,Z,ZNIM,RNIM,FID,PSI,FIDCint1,
-     &PSICS,FDDW,M,Mhl,NK,KK,FIPQ,AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX)
-     
-      DO I=1,DWFI
-      DO J=1,DWFJ
-      DRR(I,J)=0.0
-      DZZ(I,J)=0.0
-C	DFDDW(I,J)=0.0
-      END DO
-      END DO
-
-      DO I=1,DWFI
-      DO J=1,DWFJ
-      DRR(I,J)=RNIM(J+DWFJ*(I-1))
-      DZZ(I,J)=ZNIM(J+DWFJ*(I-1))
-      DFDDW(I,J)=FDDW(J+DWFJ*(I-1))
-      END DO
-      END DO
-
-      DO I=1,DWFI
-      DO J=1,DWFJ
-      DUDW(I,J)=(DFDDW(I+1,J)-DFDDW(I-1,J))/(2*DWDI)
-      DVDW(I,J)=(DFDDW(I,J+1)-DFDDW(I,J-1))/(2*DWDJ)
-      UVDW(I,J)=DSQRT((DUDW(I,J)**2)+(DVDW(I,J)**2))
-      DUVDW(J+DWFJ*(I))=UVDW(I,J)
-      END DO
-      END DO
-
-C	CALL DAWOODIAN_PDW (DL,R,Z,ZNIM,RNIM,UVDW,FID,PSI,FFID,
-C	&FPSIRES,FDDW,PPDW,P1INF,PC,DTD,KK,K,M,MN,NK,FIPQ)
-
-
-C	IF (K/=1) THEN
-      DO I=1,DWFI
-      DO J=1,DWFJ
-      IF (FIPQ(J+DWFJ*(I-1))==1) THEN
-      PDW(I,J)=1-((DFDDW(I,J)-DFDDW1(I,J))/DTD-0.5*(UVDW(I,J)**2))
-c	+50
-C     &*(P1INF-PC)+P1INF
-C	pdw(i,j)=(pdw(i,j)-pc)/(P1INF-Pc)
-      ELSE IF (FIPQ(J+DWFJ*(I-1))/=1) THEN
-      PDW(I,J)=0.0
-      END IF
-      END DO
-      END DO
-C	END IF
-C	print*,dfddw1
-
-      DO I=1,DWFI
-      DO J=1,DWFJ
-C	IF (FIPQ(J+DWFJ*(I-1))==0) THEN
-      IF ((FIPQ(J+DWFJ*(I))==0) 
-     *.OR.(FIPQ(J+DWFJ*(I-2))==0).OR.(FIPQ(J+1+DWFJ*(I-1))==0)
-     *.OR.(FIPQ(J-1+DWFJ*(I-1))==0)) THEN
-      DUDW(I,J)=0.0
-      DVDW(I,J)=0.0
-C	UVDW(I,J)=0.0
-C	PDW(I,J)=0.0
-      END IF
-C	END IF
-      END DO
-      END DO
-
-      DO I=1,DWFI
-      DO J=1,DWFJ
-      IF (FIPQ(J+DWFJ*(I-1))==0) THEN
-      DUDW(I,J)=0.0
-      DVDW(I,J)=0.0
-      UVDW(I,J)=0.0
-      PDW(I,J)=0.0
-      END IF
-      END DO
-      END DO
-
-
-      DO I=1,DWFI
-      DO J=1,DWFJ
-      DFDDW1(I,J)=DFDDW(I,J)
-      END DO
-      END DO
-
-
-C	DO I=1,DWFI
-C	DO J=1,DWFJ
-C	PDW(I,J)=PPDW(J+DWFJ*(I-1))
-C	END DO
-C	END DO
-      
-C	if (k==2) then
-C	sss=1
-C      do j=1,MN+1
-C	WRITE(102,314) 100.0*R(J),100.0*Z(J),sss
-C  314 format(f10.2,2x,f10.2,2x,f10.2,2X,F10.2)
-C	sss=sss+1
-C	end do
-C	WRITE(102,*) 'end of step',' k=',k
-C	end if
-
-      If (K==1.OR. K==2.OR.K==48.OR.K==83.OR.K==138.OR.K==152.OR.
-     &K==215.OR.K==219) then		   
-      Write(100,*) "zone  J=",DWFI,"I=",DWFJ,"f=point"
-      Write(101,*) "zone  J=",DWFI,"I=",DWFJ,"f=point"
-      DO I=1,DWFI
-      DO J=1,dwfj
-      WRITE(100,*) DRR(I,J),DZZ(I,J),PDW(I,J)
-      WRITE(101,*) -1.0*DRR(I,J),DZZ(I,J),-1.0*DUDW(I,J),DVDW(I,J)
-C	FIPQ(J+DWFJ*(I-1))
-      END DO
-      END DO
-
-      GSC1(2*M+1)=GSC1(1)
-      GSC2(2*M+1)=GSC2(1)
-      WRITE(102,4040)2*M+1
-      WRITE(102,5050)(GSC1(J),GSC2(J),UEP(J),VEP(J),J=1,2*M+1)
-      WRITE(103,4040)2*(Mhl+2-(M+2))+1
-      WRITE(103,4040)2*(MVL+2-(M+2))+1
-      WRITE(103,5050)(R(J),Z(J),UEP(J),VEP(J),J=M+2,MN+2)
-      WRITE(103,5050)(R(J),Z(J),UEP(J),VEP(J),J=M+2,MVL+2)
-      WRITE(103,5050)(-R(J),Z(J),-UEP(J),VEP(J),J=MN+1,M+2,-1)
-      WRITE(103,5050)(-R(J),Z(J),-UEP(J),VEP(J),J=MVL+1,M+2,-1)
-4040    FORMAT('ZONE  I=',I4, 'F=POINT')
-5050	FORMAT(4F10.4)										 
-
-      end if
-
-
-312   format(f10.5,2x,f10.5,2x,f10.5,2X,F10.5)
-      END IF
-      end if
-
-CDAWOODIAN)))&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+C=======================================================================
+C     LEGACY/UNUSED DAWOODIAN FIELD DRIVER
+C     The former IF (.FALSE.) block was tied to the obsolete bilge
+C     geometry and contained index-zero/N+1 finite differences.  It has
+C     been replaced by the flat-wall post-processing call above.  The
+C     original legacy helper routines remain labelled below for history.
+C=======================================================================
       
 
 
@@ -3515,6 +3426,414 @@ C
       END IF
       RETURN
       END
+C***********************************************************************
+C=======================================================================
+C     EXTERIOR LIQUID FLOW-FIELD POST-PROCESSING
+C=======================================================================
+      SUBROUTINE BUILD_WALL_FLOW_GRID(RFIELD,ZFIELD,NFR,NFZ,
+     &RMIN,RMAX,ZMIN,ZMAX,DRFIELD,DZFIELD)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION RFIELD(NFR),ZFIELD(NFZ)
+      DRFIELD=(RMAX-RMIN)/(NFR-1)
+      DZFIELD=(ZMAX-ZMIN)/(NFZ-1)
+      DO 1 I=1,NFR
+      RFIELD(I)=RMIN+(I-1)*DRFIELD
+ 1    CONTINUE
+      DO 2 J=1,NFZ
+      ZFIELD(J)=ZMIN+(J-1)*DZFIELD
+ 2    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE BUILD_FLOW_MASK(R,Z,M,RFIELD,ZFIELD,NFR,NFZ,
+     &RMIN,RMAX,ZMIN,ZMAX,CLEARANCE,FIELD_MASK)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),RFIELD(NFR),ZFIELD(NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ)
+      LOGICAL POINT_IN_BUBBLE
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      RP=RFIELD(I)
+      ZP=ZFIELD(J)
+      FIELD_MASK(I,J)=1
+C     The grid itself lies in the requested window, but retain explicit
+C     bounds tests so this routine remains safe if nonuniform grids replace it.
+      IF (RP.LT.RMIN.OR.RP.GT.RMAX.OR.ZP.LT.ZMIN.OR.ZP.GT.ZMAX)
+     &FIELD_MASK(I,J)=0
+C     Exclude the wall and a clearance band above it.  This also ensures
+C     that no finite-difference stencil is forced through z=0.
+      IF (ZP.LE.ZMIN+CLEARANCE) FIELD_MASK(I,J)=0
+      IF (FIELD_MASK(I,J).EQ.1) THEN
+      IF (POINT_IN_BUBBLE(RP,ZP,R,Z,M)) FIELD_MASK(I,J)=0
+      ENDIF
+      IF (FIELD_MASK(I,J).EQ.1) THEN
+      IF (BUBBLE_DISTANCE(RP,ZP,R,Z,M).LE.CLEARANCE)
+     &FIELD_MASK(I,J)=0
+      ENDIF
+ 1    CONTINUE
+ 2    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      LOGICAL FUNCTION POINT_IN_BUBBLE(RP,ZP,R,Z,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA)
+C     Ray crossing is applied to R(1:M+1),Z(1:M+1).  The implicit closing
+C     edge from the lower pole back to the upper pole lies on r=0, thereby
+C     closing the deforming meridional bubble polygon on the symmetry axis.
+      POINT_IN_BUBBLE=.FALSE.
+      JP=M+1
+      DO 1 I=1,M+1
+      IF ((Z(I).GT.ZP).NEQV.(Z(JP).GT.ZP)) THEN
+      RCROSS=R(I)+(ZP-Z(I))*(R(JP)-R(I))/(Z(JP)-Z(I))
+      IF (RP.LT.RCROSS) POINT_IN_BUBBLE=.NOT.POINT_IN_BUBBLE
+      ENDIF
+      JP=I
+ 1    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      DOUBLE PRECISION FUNCTION BUBBLE_DISTANCE(RP,ZP,R,Z,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA)
+      D2MIN=1.0D60
+      DO 1 I=1,M
+      CALL POINT_SEGMENT_DISTANCE2(RP,ZP,R(I),Z(I),R(I+1),Z(I+1),D2)
+      D2MIN=DMIN1(D2MIN,D2)
+ 1    CONTINUE
+C     Include the r=0 closing edge between the two bubble poles.
+      CALL POINT_SEGMENT_DISTANCE2(RP,ZP,R(M+1),Z(M+1),R(1),Z(1),D2)
+      D2MIN=DMIN1(D2MIN,D2)
+      BUBBLE_DISTANCE=DSQRT(D2MIN)
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE POINT_SEGMENT_DISTANCE2(RP,ZP,R1,Z1,R2,Z2,D2)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DR=R2-R1
+      DZ=Z2-Z1
+      DEN=DR*DR+DZ*DZ
+      IF (DEN.LE.1.0D-30) THEN
+      TSEG=0.0D0
+      ELSE
+      TSEG=((RP-R1)*DR+(ZP-Z1)*DZ)/DEN
+      TSEG=DMAX1(0.0D0,DMIN1(1.0D0,TSEG))
+      ENDIF
+      RQ=R1+TSEG*DR
+      ZQ=Z1+TSEG*DZ
+      D2=(RP-RQ)**2+(ZP-ZQ)**2
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE EVALUATE_FLOW_POTENTIAL(DL,R,Z,FID,PSI,FIDWALL,
+     &PSICS,M,MHL,RFIELD,ZFIELD,NFR,NFZ,FIELD_MASK,PHIFIELD,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX,FIELD_INVALID)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),R(NPA),Z(NPA),FID(NPA),PSI(NPA)
+      DIMENSION FIDWALL(NPA),PSICS(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AAAA(24),XXXX(24),RFIELD(NFR),ZFIELD(NFZ)
+      DIMENSION PHIFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ)
+      PI=3.14159265358979323846D0
+      DO 3 IZ=1,NFZ
+      DO 2 IR=1,NFR
+      PHIFIELD(IR,IZ)=FIELD_INVALID
+      IF (FIELD_MASK(IR,IZ).EQ.1) THEN
+      SUMPHI=0.0D0
+      DO 1 JB=1,M
+      CALL FLOW_BUBBLE_KERNEL(DL,JB,RFIELD(IR),ZFIELD(IZ),
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX,GKERNEL,HKERNEL)
+      SUMPHI=SUMPHI+GKERNEL*PSI(JB)-HKERNEL*FID(JB)
+ 1    CONTINUE
+      DO 4 JW=M+1,MHL
+      CALL FLOW_WALL_KERNEL(R,Z,JW,RFIELD(IR),ZFIELD(IZ),
+     &AAAA,XXXX,GKERNEL,HKERNEL)
+      SUMPHI=SUMPHI+GKERNEL*PSICS(JW)-HKERNEL*FIDWALL(JW)
+ 4    CONTINUE
+C     This is the same convention used by the former DAWOODIAN_FFD:
+C       phi=(integral G*q - integral phi*dG/dn)/(4*pi).
+      PHIFIELD(IR,IZ)=SUMPHI/(4.0D0*PI)
+      ENDIF
+ 2    CONTINUE
+ 3    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE FLOW_BUBBLE_KERNEL(DL,J,RF,ZF,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,AAAA,XXXX,GKERNEL,HKERNEL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AAAA(24),XXXX(24)
+      AA=DL(J)
+      BB=DL(J+1)
+      SUMG=0.0D0
+      SUMH=0.0D0
+      DO 1 L=1,10
+      S=(XXXX(L)*(BB-AA)+BB+AA)/2.0D0
+      DS=S-DL(J)
+      RS=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZS=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      DRDS=BR(J)+2.0D0*CR(J)*DS+3.0D0*DR(J)*DS**2
+      DZDS=BZ(J)+2.0D0*CZ(J)*DS+3.0D0*DZ(J)*DS**2
+      CALL FLOW_RING_KERNEL(RS,ZS,DRDS,DZDS,RF,ZF,FG,FH)
+      SUMG=SUMG+FG*AAAA(L)
+      SUMH=SUMH+FH*AAAA(L)
+ 1    CONTINUE
+      GKERNEL=(BB-AA)*SUMG/2.0D0
+      HKERNEL=(BB-AA)*SUMH/2.0D0
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE FLOW_WALL_KERNEL(R,Z,J,RF,ZF,AAAA,XXXX,
+     &GKERNEL,HKERNEL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),AAAA(24),XXXX(24)
+      SUMG=0.0D0
+      SUMH=0.0D0
+      DRDS=R(J+2)-R(J+1)
+      DZDS=Z(J+2)-Z(J+1)
+      DO 1 L=1,10
+      S=(XXXX(L)+1.0D0)/2.0D0
+      RS=R(J+1)+DRDS*S
+      ZS=Z(J+1)+DZDS*S
+      CALL FLOW_RING_KERNEL(RS,ZS,DRDS,DZDS,RF,ZF,FG,FH)
+      SUMG=SUMG+FG*AAAA(L)
+      SUMH=SUMH+FH*AAAA(L)
+ 1    CONTINUE
+      GKERNEL=SUMG/2.0D0
+      HKERNEL=SUMH/2.0D0
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE FLOW_RING_KERNEL(RS,ZS,DRDS,DZDS,RF,ZF,FG,FH)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DOUBLE PRECISION KPAR,LOGETA
+      COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
+     *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
+C     Axisymmetric ring kernels after analytic azimuthal integration.
+C     The polynomial/log expressions approximate complete elliptic
+C     integrals exactly as in the active BEM kernels GAUSS/GAUSSCOM.
+      IF (RS.LE.1.0D-14) THEN
+      FG=0.0D0
+      FH=0.0D0
+      RETURN
+      ENDIF
+      DEN=(RS+RF)**2+(ZS-ZF)**2
+      AX=DSQRT(DEN)
+      BX=DSQRT(DRDS**2+DZDS**2)
+      KPAR=4.0D0*RS*RF/DEN
+      KPAR=DMAX1(0.0D0,DMIN1(1.0D0,KPAR))
+      ETA=DMAX1(1.0D-14,1.0D0-KPAR)
+      LOGETA=DLOG(ETA)
+      PET=A0+ETA*(A1+ETA*(A2+ETA*(A3+A4*ETA)))
+      QET=B0+ETA*(B1+ETA*(B2+ETA*(B3+B4*ETA)))
+      RET=1.0D0+ETA*(C1+ETA*(C2+ETA*(C3+C4*ETA)))
+      SET=ETA*(D1+ETA*(D2+ETA*(D3+D4*ETA)))
+C     DZDS*RF/KPAR is evaluated in its finite limiting form so r=0
+C     never creates a 0/0 operation.
+      DX=DZDS*DEN/(4.0D0*RS)
+      CX=DZDS*(RS+RF)-DRDS*(ZS-ZF)-2.0D0*DX
+      FG=4.0D0*RS*BX*(PET-QET*LOGETA)/AX
+      FH=-4.0D0*RS*(CX*(RET-SET*LOGETA)/ETA+
+     &2.0D0*DX*(PET-QET*LOGETA))/(AX**3)
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE CALCULATE_FLOW_VELOCITY(PHIFIELD,RFIELD,ZFIELD,
+     &NFR,NFZ,FIELD_MASK,URFIELD,UZFIELD,UMAGFIELD,FIELD_INVALID)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION PHIFIELD(NFR,NFZ),RFIELD(NFR),ZFIELD(NFZ)
+      DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
+      DIMENSION UMAGFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ),WORK_MASK(NFR,NFZ)
+      INTEGER VALIDR,VALIDZ,IM1,IM2,IP1,IP2,JM1,JM2,JP1,JP2
+      DRFIELD=RFIELD(2)-RFIELD(1)
+      DZFIELD=ZFIELD(2)-ZFIELD(1)
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      WORK_MASK(I,J)=FIELD_MASK(I,J)
+      URFIELD(I,J)=FIELD_INVALID
+      UZFIELD(I,J)=FIELD_INVALID
+      UMAGFIELD(I,J)=FIELD_INVALID
+ 1    CONTINUE
+ 2    CONTINUE
+      DO 4 J=1,NFZ
+      DO 3 I=1,NFR
+      IF (WORK_MASK(I,J).EQ.1) THEN
+      VALIDR=0
+      VALIDZ=0
+      IM1=I-1
+      IM2=I-2
+      IP1=I+1
+      IP2=I+2
+      JM1=J-1
+      JM2=J-2
+      JP1=J+1
+      JP2=J+2
+C     Symmetry supplies the radial derivative on r=0 exactly.
+      IF (I.EQ.1) THEN
+      URFIELD(I,J)=0.0D0
+      VALIDR=1
+      ELSE
+C     Fortran does not require short-circuit evaluation.  Bounds and mask
+C     tests are deliberately nested so no I=0 or I=NFR+1 expression exists.
+      IF (I.GT.1.AND.I.LT.NFR) THEN
+      IF (WORK_MASK(IM1,J).EQ.1.AND.WORK_MASK(IP1,J).EQ.1) THEN
+      URFIELD(I,J)=(PHIFIELD(IP1,J)-PHIFIELD(IM1,J))/
+     &(2.0D0*DRFIELD)
+      VALIDR=1
+      ENDIF
+      ENDIF
+      IF (VALIDR.EQ.0.AND.IP2.LE.NFR) THEN
+      IF (WORK_MASK(IP1,J).EQ.1.AND.WORK_MASK(IP2,J).EQ.1) THEN
+      URFIELD(I,J)=(-3.0D0*PHIFIELD(I,J)+4.0D0*PHIFIELD(IP1,J)
+     &-PHIFIELD(IP2,J))/(2.0D0*DRFIELD)
+      VALIDR=1
+      ENDIF
+      ENDIF
+      IF (VALIDR.EQ.0.AND.IM2.GE.1) THEN
+      IF (WORK_MASK(IM1,J).EQ.1.AND.WORK_MASK(IM2,J).EQ.1) THEN
+      URFIELD(I,J)=(3.0D0*PHIFIELD(I,J)-4.0D0*PHIFIELD(IM1,J)
+     &+PHIFIELD(IM2,J))/(2.0D0*DRFIELD)
+      VALIDR=1
+      ENDIF
+      ENDIF
+      ENDIF
+C     The same nested structure prevents J=0 or J=NFZ+1 evaluation.
+      IF (J.GT.1.AND.J.LT.NFZ) THEN
+      IF (WORK_MASK(I,JM1).EQ.1.AND.WORK_MASK(I,JP1).EQ.1) THEN
+      UZFIELD(I,J)=(PHIFIELD(I,JP1)-PHIFIELD(I,JM1))/
+     &(2.0D0*DZFIELD)
+      VALIDZ=1
+      ENDIF
+      ENDIF
+      IF (VALIDZ.EQ.0.AND.JP2.LE.NFZ) THEN
+      IF (WORK_MASK(I,JP1).EQ.1.AND.WORK_MASK(I,JP2).EQ.1) THEN
+      UZFIELD(I,J)=(-3.0D0*PHIFIELD(I,J)+4.0D0*PHIFIELD(I,JP1)
+     &-PHIFIELD(I,JP2))/(2.0D0*DZFIELD)
+      VALIDZ=1
+      ENDIF
+      ENDIF
+      IF (VALIDZ.EQ.0.AND.JM2.GE.1) THEN
+      IF (WORK_MASK(I,JM1).EQ.1.AND.WORK_MASK(I,JM2).EQ.1) THEN
+      UZFIELD(I,J)=(3.0D0*PHIFIELD(I,J)-4.0D0*PHIFIELD(I,JM1)
+     &+PHIFIELD(I,JM2))/(2.0D0*DZFIELD)
+      VALIDZ=1
+      ENDIF
+      ENDIF
+      IF (VALIDR.EQ.1.AND.VALIDZ.EQ.1) THEN
+      UMAGFIELD(I,J)=DSQRT(URFIELD(I,J)**2+UZFIELD(I,J)**2)
+      ELSE
+C     No derivative is ever taken through the bubble or wall.  If a
+C     second-order one-sided stencil is unavailable, invalidate the point.
+      FIELD_MASK(I,J)=0
+      URFIELD(I,J)=FIELD_INVALID
+      UZFIELD(I,J)=FIELD_INVALID
+      UMAGFIELD(I,J)=FIELD_INVALID
+      ENDIF
+      ENDIF
+ 3    CONTINUE
+ 4    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE CALCULATE_FLOW_PRESSURE(PHIFIELD,PHIPREV,URFIELD,
+     &UZFIELD,FIELD_MASK,FIELD_MASK_PREV,NFR,NFZ,TIMECURRENT,
+     &TIMEPREV,HAVE_PREV,PC,P1INF,PSTARFIELD,PPAFIELD,
+     &PRESSURE_READY,FIELD_INVALID)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION PHIFIELD(NFR,NFZ),PHIPREV(NFR,NFZ)
+      DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
+      DIMENSION PSTARFIELD(NFR,NFZ),PPAFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ),FIELD_MASK_PREV(NFR,NFZ)
+      LOGICAL HAVE_PREV,PRESSURE_READY
+      PRESSURE_READY=.FALSE.
+      DELTAT=TIMECURRENT-TIMEPREV
+      IF (HAVE_PREV.AND.DELTAT.GT.0.0D0) PRESSURE_READY=.TRUE.
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      PSTARFIELD(I,J)=FIELD_INVALID
+      PPAFIELD(I,J)=FIELD_INVALID
+      IF (PRESSURE_READY.AND.FIELD_MASK(I,J).EQ.1.AND.
+     &FIELD_MASK_PREV(I,J).EQ.1) THEN
+      DPHIDT_EULER=(PHIFIELD(I,J)-PHIPREV(I,J))/DELTAT
+      USQUARED=URFIELD(I,J)**2+UZFIELD(I,J)**2
+C     Dawoodian et al. Eq. (9) uses the material derivative:
+C       p* = 1 - d(phi*)/dt* + 0.5*|u*|**2  (gravity omitted).
+C     The stored grid is Eulerian, so d(phi)/dt = partial(phi)/partial(t)
+C     + u.grad(phi) = partial(phi)/partial(t) + |u|**2.  Therefore this is
+C     equivalently p* = 1 - partial(phi)/partial(t) - 0.5*|u|**2.
+      DPHIDT=DPHIDT_EULER+USQUARED
+      PSTARFIELD(I,J)=1.0D0-DPHIDT+0.5D0*USQUARED
+      PPAFIELD(I,J)=PC+PSTARFIELD(I,J)*(P1INF-PC)
+      ENDIF
+ 1    CONTINUE
+ 2    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE STORE_FLOW_SNAPSHOT(PHIFIELD,FIELD_MASK,NFR,NFZ,
+     &PHIPREV,FIELD_MASK_PREV)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION PHIFIELD(NFR,NFZ),PHIPREV(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ),FIELD_MASK_PREV(NFR,NFZ)
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      PHIPREV(I,J)=PHIFIELD(I,J)
+      FIELD_MASK_PREV(I,J)=FIELD_MASK(I,J)
+ 1    CONTINUE
+ 2    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE WRITE_WALL_FLOW_ZONE(IUNIT,K,TIME,RFIELD,ZFIELD,
+     &NFR,NFZ,PHIFIELD,URFIELD,UZFIELD,UMAGFIELD,PSTARFIELD,
+     &PPAFIELD,FIELD_MASK,PRESSURE_READY,FIELD_INVALID)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION RFIELD(NFR),ZFIELD(NFZ),PHIFIELD(NFR,NFZ)
+      DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
+      DIMENSION UMAGFIELD(NFR,NFZ),PSTARFIELD(NFR,NFZ)
+      DIMENSION PPAFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ)
+      LOGICAL PRESSURE_READY
+      WRITE(IUNIT,100)K,TIME,NFR,NFZ,TIME
+ 100  FORMAT('ZONE T="K=',I6,' T=',ES16.8E3,'", I=',I5,
+     &', J=',I5,', F=POINT, SOLUTIONTIME=',ES16.8E3)
+      IF (PRESSURE_READY) THEN
+      WRITE(IUNIT,*)'AUXDATA PRESSURE_AVAILABLE="YES"'
+      ELSE
+      WRITE(IUNIT,*)'AUXDATA PRESSURE_AVAILABLE="NO"'
+      ENDIF
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      IF (FIELD_MASK(I,J).EQ.1) THEN
+      WRITE(IUNIT,101)RFIELD(I),ZFIELD(J),PHIFIELD(I,J),
+     &URFIELD(I,J),UZFIELD(I,J),UMAGFIELD(I,J),PSTARFIELD(I,J),
+     &PPAFIELD(I,J),FIELD_MASK(I,J)
+      ELSE
+      WRITE(IUNIT,101)RFIELD(I),ZFIELD(J),FIELD_INVALID,
+     &FIELD_INVALID,FIELD_INVALID,FIELD_INVALID,FIELD_INVALID,
+     &FIELD_INVALID,FIELD_MASK(I,J)
+      ENDIF
+ 1    CONTINUE
+ 2    CONTINUE
+ 101  FORMAT(8(1X,ES24.15E3),1X,I1)
+      RETURN
+      END
+C***********************************************************************
+C     LEGACY/UNUSED DAWOODIAN FLOW-FIELD ROUTINES BELOW
+C     COP1, DAWOODIAN_FFD, GAUSSDW, AND GACOMDW describe the former bilge
+C     geometry.  They are retained only as historical reference and are
+C     not called by the flat-wall solver or the new post-processing path.
 C***********************************************************************
       SUBROUTINE COP1 (R,Z,RNIM,ZNIM,M,MHU,MCU,MOB,MCL,MHL,RM,FIP,KK
      & ,XYB,ZA,DWFI,DWFJ,DWDI,DWDJ,RCUD,RCLD,THICK)
