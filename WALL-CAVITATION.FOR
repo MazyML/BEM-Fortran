@@ -1,6 +1,7 @@
 C     ********************************************************************
-C     * THIS PROGRAM IS WRITTEN FOR COMPUTING COLLAPSE OF A CAVITATIONAL *
-C     * BUBBLE. THE BUBBLE IS INIsTIALLY IN ITS MAXIMUM SIZE.    PRESSURE *
+C     * THIS PROGRAM COMPUTES THE COLLAPSE OF A CAVITATION BUBBLE ABOVE  *
+C     * A FLAT, RIGID WALL. THE WALL IS FINITE IN THE NUMERICAL MODEL     *
+C     * AND APPROXIMATES AN INFINITE PLANE WHEN ITS RADIUS IS LARGE.      *
 C     * CHANGE INSIDE THE BUBBLE IS IGNORED.AN INDIRECT BOUNDARY ELEMENT *
 C     * METHOD IS USED TO CALCULATE NORMAL VELOCITY OF SURFACE OF    THE *
 C     * BUBBLE.  VELOCITY POTENTIAL IS ASSUMED CONSTANT ON EACH  SEGMENT *
@@ -8,9 +9,9 @@ C     * AND COLOCATION POINTS ARE IN THE MIDDLE OF THE SEGMENTS.    ALSO *
 C     * AN EQUAL SPACE METHOD IS USED TO MAKE EQUAL SEGMENTS BY    USING *
 C     * LINEAR INTERPOLATION AND APPROXIMATION.                          * 
 C     ********************************************************************
-      PROGRAM CBRGXCY3
+      PROGRAM WALLCAV
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -24,23 +25,26 @@ C     ********************************************************************
       COMMON/SPLR/AR,BR,CR,DR
       COMMON/SPLZ/AZ,BZ,CZ,DZ
       COMMON/GAUSS10/AAAA,XXXX
-	PARAMETER (DWFI=600/2)
-	PARAMETER (DWFJ=1410/2)
-	PARAMETER (DWDI=0.01)
-	PARAMETER (DWDJ=0.01)
+
+C=======================================================================
+C     EXTERIOR LIQUID FLOW-FIELD SETTINGS
+C     Coordinates and potentials are nondimensional.  FIELD_CALC_EVERY
+C     defaults to one because Bernoulli pressure is most accurate from
+C     consecutive accepted states.  Output is intentionally less frequent.
+C=======================================================================
+      PARAMETER (NFR=161,NFZ=161)
+      LOGICAL FIELD_ENABLED
+      PARAMETER (FIELD_ENABLED=.TRUE.)
+      INTEGER FIELD_CALC_EVERY,FIELD_OUTPUT_EVERY
+      PARAMETER (FIELD_CALC_EVERY=1,FIELD_OUTPUT_EVERY=10)
+      PARAMETER (FIELD_INVALID=-1.0D30)
 
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),FI(NPA),
      *          PSIS(NPA),UCP(NPA),VCP(NPA),UEP(NPA),VEP(NPA),
      *          VM(NPA),ALF(NPA),BET(NPA),TET(NPA),
      *          RX(NPA),ZX(NPA),B(NPA,NPA),FID(NPA),
      *          FID1(NPA),DFD(NPA),DFITD(NPA),
-     *          G1(NPA),G2(NPA),FDDW(999999),
-     *          FIPQ(999999),DRR(999,999),PPDW(999999),
-	*          DZZ(999,999),RNIM(999999),ZNIM(999999),DFDDW(999,999),
-	*          X1(999999),Y1(999999),FIQ(5,999999),FIP(5,999999),
-	*          DUDW(999,999),DVDW(999,999),UVDW(999,999),XYB(5,999999),
-	*          ZA(5,999),XYC(5,999999),PDW(999,999),DFDDW1(999,999),
-     *          DUVDW(999999)
+     *          G1(NPA),G2(NPA)
       DIMENSION RN(NPA),ZN(NPA),UB(NPA),VB(NPA)
       DIMENSION RYP(NPA),RYM(NPA),ZYP(NPA),ZYM(NPA)
       DIMENSION A(NPA,NPA),PSI(NPA)
@@ -48,7 +52,7 @@ C     ********************************************************************
       DIMENSION X(16),AA1(16)
       DIMENSION R2R(NPA),Z2Z(NPA),FI2FI(NPA)
       DIMENSION PCOM(NPA)
-      DIMENSION FIDC(200,500)
+      DIMENSION FIDC(NPA,500)
       DIMENSION ABC(NPA,NPA),BCD(NPA,NPA)
       DIMENSION V1(NPA),U1(NPA),V2(NPA),U2(NPA)
       DIMENSION CDE(NPA)
@@ -69,7 +73,14 @@ C     ********************************************************************
       DIMENSION APSI(NPA),BPSI(NPA),CPSI(NPA),DPSI(NPA)
       DIMENSION UL1(NPA),VL1(NPA),UL2(NPA),VL2(NPA)
       DIMENSION XXXX(24),AAAA(24)
-      DIMENSION PSICS(NPA)  
+      DIMENSION PSICS(NPA),FIDWALL(NPA)
+      DIMENSION RFIELD(NFR),ZFIELD(NFZ)
+      DIMENSION PHIFIELD(NFR,NFZ),PHIPREV(NFR,NFZ)
+      DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
+      DIMENSION UMAGFIELD(NFR,NFZ),PSTARFIELD(NFR,NFZ)
+      DIMENSION PPAFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ),FIELD_MASK_PREV(NFR,NFZ)
+      LOGICAL FIELD_HAVE_PREV,FIELD_PRESSURE_READY
 CSAL      OPEN(UNIT=9,FILE='DJA.SCR',STATUS='OLD')
 CSAL      OPEN(UNIT=10,FILE='DADEXCYB',STATUS='OLD')
 CSAL      OPEN(UNIT=39,FILE='DADEMB',STATUS='OLD')
@@ -88,14 +99,15 @@ CSAL      OPEN(UNIT=31,FILE='PCPSZ',STATUS='OLD')
 CSAL      OPEN(UNIT=34,FILE='DJR1.SCR',STATUS='OLD')
 CSAL      OPEN(UNIT=35,FILE='WPREDATA',STATUS='OLD')
 CSAL	 OPEN(UNIT=9,FILE='DJA.SCR')
-      OPEN(UNIT=10,FILE='BILGE-DADE.TXT')
+      OPEN(UNIT=10,FILE='WALL-DADE.TXT',STATUS='OLD')
 CSAL      OPEN(UNIT=39,FILE='DADEMB')
 C      OPEN(UNIT=11,FILE='TEST1',STATUS='OLD')
-	OPEN(UNIT=11,FILE='GEOMETRY.TXT')
-	OPEN(UNIT=13,FILE='RATIO.TXT')
+      OPEN(UNIT=11,FILE='WALL-GEOMETRY.TXT')
+      OPEN(UNIT=13,FILE='RATIO.TXT')
       OPEN(UNIT=14,FILE='VOLT.TXT') 
       OPEN(UNIT=15,FILE='CENT.TXT')
-	OPEN(UNIT=133,FILE='RATIO-DTIME.TXT')
+      OPEN(UNIT=133,FILE='RATIO-DTIME.TXT')
+      OPEN(UNIT=149,FILE='PRESSURE-DTIME.TXT') 
       OPEN(UNIT=144,FILE='VOLT-DTIME.TXT') 
       OPEN(UNIT=155,FILE='CENT-DTIME.TXT')
       OPEN(UNIT=12,FILE='DTIME.TXT')
@@ -114,26 +126,15 @@ CSAL      OPEN(UNIT=31,FILE='PCPSZ')
 CSAL      OPEN(UNIT=34,FILE='DJR1.SCR')
 CSAL      OPEN(UNIT=35,FILE='WPREDATA')
 CSAL	OPEN(UNIT=1,FILE='BUBBLE.TXT')
-      OPEN(UNIT=30,FILE='NOZZLE1.plt')
+      OPEN(UNIT=30,FILE='WALL-CAVITATION.plt')
 C	OPEN(UNIT=3000,FILE='NOZ.plt')
-	OPEN(UNIT=300,FILE='NOZZLE1-NEW.plt')
-	OPEN (UNIT=100,FILE="1 (PRESURE CONTOUR).PLT")
-      WRITE (100,*) 'VARIABLES="R","Z","PDW"' 
-	OPEN (UNIT=101,FILE="2 (VELOCITY VECTOR).PLT")
-      WRITE (101,*) 'VARIABLES="R","Z","UDW","VDW"'   
-	OPEN (UNIT=102,FILE="3 (bubble).PLT")
-	WRITE (102,*) 'TITLE=,"SAMPLE FINITE-ELEMENT DATA"'
-      WRITE (102,*) 'VARIABLES="R","Z","UDW","VDW"'
-	OPEN (UNIT=103,FILE="4 (Surface).PLT")
-	WRITE (103,*) 'TITLE=,"SAMPLE FINITE-ELEMENT DATA"'
-      WRITE (103,*) 'VARIABLES="R","Z","UDW","VDW"'
+      OPEN(UNIT=300,FILE='WALL-CAVITATION-HALF.plt')
 
-	WRITE(30,*)'TITLE="SIMPLE DATA FILE" '
+      WRITE(30,*)'TITLE="SIMPLE DATA FILE" '
       WRITE(30,*) 'VARIABLES=,"R","Z","U","V"'
-CSAL      READ(10,*)M,RM,R0D,RMD,PC,PINF,D,T,ADFD,MN,DIAM
-CSAL      READ(10,*)P1INF,PVI,EPS,ARR,BRR,NMTE
-	READ(10,*)M,MHU,MCU,MOB,MCL,MHL,RM,R0D,RMD,PC,PINF,D,T,
-	&ADFD,DIAMETERD,RCU,RCL,TETACU,HPRIME,N,P1INF,EPS,NMTE,CRITER
+      READ(10,*)M,NWALL,RM,R0D,PC,PINF,D,T,ADFD,HPRIME,
+     &WALLR,P1INF,EPS,NMTE,CRITER
+      MHL=M+NWALL
       READ(10,*)(XX(L),L=1,12)
       READ(10,*)(AA2(L),L=1,12)
       READ(10,*)(XXXX(L),L=1,10)
@@ -159,57 +160,29 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       D2=.09200180
       D3=.04069698
       D4=.00526450
-CSAL  GAMA=H/RM
-	III=0
+      III=0
       MTE=0
       R0=R0D*RM
       RMD=RM/RM
-CCC	THICK=THICKNESS/RM
-CSAL	DELTAZ=2.*6.*RMD/(MN-M)
-C----S--------SALEKI
-CSAL	TETA=3.14159265*TETA/180
-      RCUD=RCU/RM
-	RCLD=RCL/RM
-	THICK=RCLD-RCUD
-CCC	DIAMETERD=DIAMETER/(2.*RM)
-CSAL	TETA=ASIN (A) ((DIAMETERD/(2*RCUD)))
-CCC	TETA=ASIN (DIAMETERD/(2*RCUD))
-	PRINT*,'DIAMETERD*RM=',1000.*DIAMETERD*RM
-	TETAC=ASIN (((DIAMETERD/2.)/(RCUD+THICK/2.)))
-CCC	GAMA=HPRIME+RCUD*(COS(TETA)-1)
-C-SAL-C	GAMA=HPRIME+RCUD*COS(TETA)
-CCC	GAMA=HPRIME-RCUD+RCUD*COS(TETA)
-	GAMA=HPRIME
-	TETACU=3.14159265*TETACU/180.
-CCC	TETA1=ASIN (RCU*(SIN(TETA))/RCL)
-CCC	TETA1=3.14159265-TETA1
-CCC	TETA2=3.14159265-TETA-TETA1
-CCC	RH=RCL*SIN(TETA2)/SIN(TETA)
-CCC	RHD=RH/RM
-CCC	DELTARU=(DIAM/(2.*RM)-RCUD*COS(TETACU))/(MHU-MVU)
-CCC	DELTARU=(DIAM/(2.*RM)-RCUD*SIN(TETACU))/(MHU-MVU)
-CCC	DELTARL=(DIAM/(2.*RM)-RCLD)/(MHL-MCL)
-CCC	HV=(RCUD*SIN(TETACU))
-CCC	HH=N*RMD-HV
-	HH=N*RMD
-	WRITE(11,*)'RCUD=',RCUD
-	WRITE(11,*)	'RCLD=',RCLD
-	WRITE(11,*)'GAMA=',GAMA
-	WRITE(11,*)'TETACU='	,TETACU,TETACU*180./3.14159265
-CCC      WRITE(11,*)'TETACU=',TETACU*180./3.14159265
-CCC	WRITE(11,*)'RHD=',RHD
-CCC      WRITE(11,*)'TETA1=',TETA1*180./3.14159265
-CCC	WRITE(11,*)'TETA2=',TETA2*180./3.1415926
-CCC	WRITE(11,*)'HV=',HV
-	WRITE(11,*)'HH=',HH	
-	WRITE(11,*)'HPRIME=',HPRIME
-	WRITE(11,*)'TETAC=',TETAC*180./3.14159265
-	WRITE(11,*)'DIAMETERD=',DIAMETERD
-	WRITE(11,*)'THICK=',THICK
-CCC	WRITE(11,*)'RCUD*COS(TETA)',RCUD*COS(TETA)
-C------E------SALEKI
-	FI0=0.0
-	FI0D=0.0
+      GAMA=HPRIME
+      IF (MHL.GT.NPA-2) THEN
+      PRINT*,'TOO MANY ELEMENTS: M + NWALL MUST BE <=',NPA-2
+      STOP
+      ENDIF
+      IF (2*M.GT.NPA) THEN
+      PRINT*,'TOO MANY BUBBLE ELEMENTS: 2*M MUST BE <=',NPA
+      STOP
+      ENDIF
+      IF (HPRIME.LE.R0D) THEN
+      PRINT*,'HPRIME MUST EXCEED R0D SO THE BUBBLE IS ABOVE THE WALL'
+      STOP
+      ENDIF
+      WRITE(11,*)'BUBBLE ELEMENTS=',M
+      WRITE(11,*)'WALL ELEMENTS=',NWALL
+      WRITE(11,*)'STAND-OFF H/R0=',HPRIME/R0D
+      WRITE(11,*)'WALL RADIUS/R0=',WALLR/R0D
+      FI0=0.0
+      FI0D=0.0
       DO  2100  I=1,M+1
       ALF(I)=3.14159265/2.-((I-1)*(180./M))*3.14159265/180.
       Z(I)=GAMA+R0*SIN(ALF(I))/RM
@@ -219,7 +192,7 @@ C------E------SALEKI
       R(M+1)=0.0
       DL(1)=0.0
       DO  1  J=2,M+1
-      DL(J)=DSQRT((R(J)+R(J-1))**2+(Z(J)-Z(J-1))**2)+DL(J-1)
+      DL(J)=DSQRT((R(J)-R(J-1))**2+(Z(J)-Z(J-1))**2)+DL(J-1)
  1    CONTINUE
       DO  2  LK=1,5
       CALL CUBSPLR (R,DL,AR,BR,CR,DR,M)
@@ -257,7 +230,7 @@ C------E------SALEKI
       CALL CUSPRR (DL,AR,BR,CR,DR,RR,M)
       CALL CUSPZZ (DL,AZ,BZ,CZ,DZ,ZZ,M)
       DO 133  J=1,M
-	FID(J)=FI0D
+      FID(J)=FI0D
  133  CONTINUE
       DO  515  J=1,M
       DH(J)=DL(J+1)-DL(J)
@@ -282,64 +255,41 @@ CSAL      WRITE(41,938)RATIO
 CSAL      WRITE(42,938)CEN
 CSAL 937  FORMAT(1X,F12.5,5X,F12.5)
  938  FORMAT(1X,F12.5)
-	PV=PC+EPS*(P1INF-PC)*((VOLI/VOLT)**1.25)
-	WRITE(14,6171)dtime,VOLT
-	WRITE(144,6171)1000.*dtime*RM*(1000./(P1INF-PC))**.5,VOLT
+      PV=PC+EPS*(P1INF-PC)*((VOLI/VOLT)**1.25)
+      WRITE(14,6171)dtime,VOLT
+      WRITE(149,6171)dtime,(PV-PC)/(P1INF-PC)
+      WRITE(144,6171)1000.*dtime*RM*(D/(P1INF-PC))**.5,VOLT
       WRITE(12,6171)DTIME
       WRITE(13,6171)dtime,RATIO
-	WRITE(133,6171)1000.*dtime*RM*(1000./(P1INF-PC))**.5,RATIO
+      WRITE(133,6171)1000.*dtime*RM*(D/(P1INF-PC))**.5,RATIO
       WRITE(15,6171)dtime,CEN 
-	WRITE(155,6171)1000.*dtime*RM*(1000./(P1INF-PC))**.5,CEN
+      WRITE(155,6171)1000.*dtime*RM*(D/(P1INF-PC))**.5,CEN
 CSAL	PV=PC+EPS*(P1INF-PC)*((VOLI/VOLT)**1.4)
-CSAL      CALL DEFINE2 (R,Z,RR,ZZ,RM,DELTAZ,DIAM,M,MN)
-CSAL      DO  1355  J=M+1,MN
-CSAL      PSICS(J)=0.0
-CSAL 1355 CONTINUE
-C-------SAL-----UPPER VERTICAL SURFACE------------
-CCC      CALL DEFINE21 (R,Z,RR,ZZ,RM,DIAM,M,MVU,HH,RMD,N,RCUD,TETACU)
-CCC      DO  1355  J=M+1,MVU
-CCC      PSICS(J)=0.0
-CCC 1355 CONTINUE
-C-----------SAL---UPPER HORIZONTAL SURFACE -------
-	CALL DEFINE20 (R,Z,RR,ZZ,RM,HH,M,MHU,THICK,RCUD,TETACU)
-      DO  13550  J=M+1,MHU
-      PSICS(J)=0.0
-13550 CONTINUE
-C-----------SAL-----  UPPER CURVATURE SURFACE-------
-	CALL DEFINE10 (R,Z,RR,ZZ,RM,RCUD,MHU,MCU,TETACU,THICK,TETAC,
-	&DIAMETERD)
-      DO  13559  J=MHU+1,MCU
-      PSICS(J)=0.0
-13559 CONTINUE
-C---------SAL-------OBLIQUE SURFACE -------
-	CALL DEFINE69 (R,Z,RR,ZZ,RM,RCLD,RCUD,DIAMETERD,MCU,
-  	&MOB,THICK)
-      DO  13554  J=MCU+1,MOB
-      PSICS(J)=0.0
-13554 CONTINUE	   
-C--------SAL-------LOWER CURVATURE SURFACE --------
-	CALL DEFINE50 (R,Z,RR,ZZ,RM,RCLD,RCUD,TETACU,TETAC,MOB,MCL,THICK
-	&,DIAMETERD)
-      DO  13553  J=MOB+1,MCL
-      PSICS(J)=0.0
-13553 CONTINUE
-C--------SAL---------LOWER HORIZONTAL SURFACE -------------
-	CALL DEFINE40 (R,Z,RR,ZZ,RM,MCL,MHL,RCLD,RCUD,TETACU,
-	&THICK,HH)
-      DO  13552  J=MCL+1,MHL
+C     FLAT RIGID WALL: ZERO NORMAL VELOCITY ON Z=0.
+      CALL DEFINEWALL (R,Z,RR,ZZ,M,MHL,WALLR)
+      DO  13552  J=M+1,MHL
       PSICS(J)=0.0
 13552 CONTINUE
-C------------SAL------LOWER VERTICAL SURFACE ----------
-CCC	CALL DEFINE30 (R,Z,RR,ZZ,RM,DIAM,MHL,MVL,N,RMD,RCUD)
-CCC      DO  13551  J=MHL+1,MVL
-CCC      PSICS(J)=0.0
-CCC13551 CONTINUE
-C------------SAL------LINEAR SURFACE ----------
-CCC	CALL DEFINE300 (R,Z,RR,ZZ,RM,MCU,MHU,N,RMD,RCUD,TETACU)
-CCC      DO  13551  J=MCU+1,MHU
-CCC      PSICS(J)=0.0
-CCC13551 CONTINUE
+      DO 13553 J=M+2,MHL+2
+      UEP(J)=0.0
+      VEP(J)=0.0
+13553 CONTINUE
       DTIME=0.0
+      FIELD_HAVE_PREV=.FALSE.
+      FIELD_TIME_PREV=0.0D0
+      IF (FIELD_ENABLED) THEN
+      RFIELD_MIN=0.0D0
+      RFIELD_MAX=DMIN1(WALLR,4.0D0*R0D)
+      ZFIELD_MIN=0.0D0
+      ZFIELD_MAX=HPRIME+3.0D0*R0D
+      CALL BUILD_WALL_FLOW_GRID(RFIELD,ZFIELD,NFR,NFZ,
+     &RFIELD_MIN,RFIELD_MAX,ZFIELD_MIN,ZFIELD_MAX,DRFIELD,DZFIELD)
+      FIELD_CLEARANCE=1.5D0*DMAX1(DRFIELD,DZFIELD)
+      OPEN(UNIT=310,FILE='WALL-FLOW-FIELD.plt',STATUS='REPLACE')
+      WRITE(310,*)'TITLE="Exterior liquid flow field"'
+      WRITE(310,*)'VARIABLES="R","Z","PHI","UR","UZ",',
+     &'"UMAG","PSTAR","P_PA","MASK"'
+      ENDIF
 CSAL      WRITE(31,1031)PCOM(M+1),PSICS(M+1),Z(M+2)
 CSAL      IF (K.LE.200) GO TO 1220
 CSAL      DO  4100  J=1,M
@@ -352,10 +302,10 @@ CSAL      RR(J)=0.5*(R(J+1)+R(J+2))
 CSAL      ZZ(J)=0.5*(Z(J+1)+Z(J+2))
 CSAL 4200 CONTINUE
 
-start
+Ctart
 CSAL 1220 KSL=0 
-	 IF(III.EQ.1) THEN
-		DO  382  J=1,M+1
+      IF(III.EQ.1) THEN
+      DO  382  J=1,M+1
       GSC1(J)=R(J)
       GSC2(J)=Z(J)
   382 CONTINUE
@@ -365,17 +315,17 @@ CSAL 1220 KSL=0
   383 CONTINUE
     
 C----SALEKI---((
-	DO  3820  J=1,M+1
+      DO  3820  J=1,M+1
       GSC1(J)=R(J)
       GSC2(J)=Z(J)
-	UB(J)=UEP(J)
-	VB(J)=VEP(J)
+      UB(J)=UEP(J)
+      VB(J)=VEP(J)
  3820 CONTINUE
       DO  3830  J=1,M
       GSC1(M+J+1)=-GSC1(M-J+1)
       GSC2(M+J+1)=GSC2(M-J+1)
-	UB(M+J+1)=-UEP(M-J+1)
-	VB(M+J+1)=VEP(M-J+1)
+      UB(M+J+1)=-UEP(M-J+1)
+      VB(M+J+1)=VEP(M-J+1)
  3830 CONTINUE
 
 C      WRITE(3000,4000)2*M+1
@@ -393,8 +343,8 @@ C      WRITE(3000,4000)2*M+1
 
 4000    FORMAT('ZONE  I=',I4, 'F=POINT')
 5000	  FORMAT(4F10.4) 
-	  STOP
-	ENDIF
+      STOP
+      ENDIF
       ILS=1
       DO  200  K=1,500
 CSAL 821  DO  300  I=1,MN
@@ -402,7 +352,7 @@ CSAL 821  DO  300  I=1,MN
 CCC  821  DO  300  I=1,MVL
       SUNN1=0.0
       DO  400  J=1,M
-      CALL GAUSS(DL,ENT1,ENT2,I,J,X)
+      CALL GAUSS(DL,ENT1,ENT2,I,J)
       FUN1=ENT1
       FUN2=ENT2
       IF (I.EQ.J)  THEN
@@ -411,10 +361,10 @@ CCC  821  DO  300  I=1,MVL
       ABC(I,I)=B(I,I)
       ENDIF
       IF (I.NE.J) THEN
-	 FUNN1=FID(J)*FUN2
-	 SUNN1=SUNN1+FUN2
-	 B(I,J)=FUNN1
-	 ABC(I,J)=FUNN1
+      FUNN1=FID(J)*FUN2
+      SUNN1=SUNN1+FUN2
+      B(I,J)=FUNN1
+      ABC(I,J)=FUNN1
       ENDIF
       FUNN2=FUN1
   44  FORMAT(F20.10)
@@ -424,11 +374,11 @@ CCC  821  DO  300  I=1,MVL
  1012 FORMAT(2X,I2,'RR',F8.5,1X,'ZZ',F8.5,1X,'FUN2',F8.5,1X,'FUN1',F8.5)
 CSAL      DO  4001  J=M+1,MN
 CCC	DO  4001  J=M+1,MVL
-	DO  4001  J=M+1,MHL
+      DO  4001  J=M+1,MHL
       IF (I.EQ.J)  THEN
-	 CALL HAKIM1(FU11,ENT3,I,J,X)
-	 CALL SING1(FU12,ENT5,I,J,Y)
-	  FUN1=ENT3+ENT5
+      CALL HAKIM1(FU11,ENT3,I,J)
+      CALL SING1(FU12,ENT5,I,J,Y)
+      FUN1=ENT3+ENT5
       ELSE
       CALL GAUSSCOM (FU1,FU2,ENT1,ENT2,I,J)
       FUN1=ENT1
@@ -436,10 +386,10 @@ CCC	DO  4001  J=M+1,MVL
       ENDIF
  1015 FORMAT(2X,I2,'RR',F8.5,1X,'ZZ',F8.5,1X,'FUN2',F8.5,1X,'FUN1',F8.5)
       IF (I.NE.J) THEN
-	 FUNN1=FUN2
-	 SUNN1=SUNN1+FUN2
-	 B(I,J)=FUNN1
-	 BCD(I,J)=-FUNN1
+      FUNN1=FUN2
+      SUNN1=SUNN1+FUN2
+      B(I,J)=FUNN1
+      BCD(I,J)=-FUNN1
       ENDIF
       FUNN2=FUN1*(-PSICS(J))
       A(I,J)=FUNN2
@@ -466,33 +416,71 @@ CSAL 1030 FORMAT(F20.10)
 CSAL      MX=MN
 CSAL      CALL SLNPD (BCD,CDE,D,MN,MX)
 CCC	 DO  4002  I=1,MVL
-	DO  4002  I=1,MHL
+      DO  4002  I=1,MHL
 CCC      BCD(I,MVL+1)=0.0
-	BCD(I,MHL+1)=0.0
+      BCD(I,MHL+1)=0.0
 CCC      DO  4003  J=1,MVL
 CCC      BCD(I,MVL+1)=BCD(I,MVL+1)+ABC(I,J)
-	DO  4003  J=1,MHL
+      DO  4003  J=1,MHL
       BCD(I,MHL+1)=BCD(I,MHL+1)+ABC(I,J)
  4003 CONTINUE
 CCC      CDE(I)=BCD(I,MVL+1)
-	CDE(I)=BCD(I,MHL+1)
+      CDE(I)=BCD(I,MHL+1)
  4002 CONTINUE
  1020 FORMAT(F20.10)
  1030 FORMAT(F20.10)
 CCC      MX=MVL
 CCC      CALL SLNPD (BCD,CDE,D,MVL,MX)
-	MX=MHL
+      MX=MHL
       CALL SLNPD (BCD,CDE,D,MHL,MX)
       DO 602 I=1,M
       PSI(I)=CDE(I)
  602  CONTINUE
 CSAL      DO  603  I=M+1,MN
 CCC	DO  603  I=M+1,MVL
-	DO  603  I=M+1,MHL
+      DO  603  I=M+1,MHL
       FIDC(I,K)=CDE(I)
 CSAL      WRITE(23,1223) FIDC(I,K)
  603  CONTINUE
  1223 FORMAT (1X,6F16.4)
+C=======================================================================
+C     EXTERIOR LIQUID FLOW-FIELD POST-PROCESSING
+C
+C     ILS=1 is the Eulerian BEM solve on the last accepted geometry.
+C     At this point FID, PSI, FIDC(:,K), PSICS, and R/Z all belong to
+C     DTIME.  DTIME is not advanced to the predictor time until below,
+C     after the velocity reconstruction and adaptive-step calculation.
+C=======================================================================
+      IF (FIELD_ENABLED.AND.ILS.EQ.1) THEN
+      IF (MOD(K-1,FIELD_CALC_EVERY).EQ.0) THEN
+      FIELD_TIME_CURRENT=DTIME
+      DO 604 J=M+1,MHL
+      FIDWALL(J)=FIDC(J,K)
+ 604  CONTINUE
+      CALL BUILD_FLOW_MASK(R,Z,M,RFIELD,ZFIELD,NFR,NFZ,
+     &RFIELD_MIN,RFIELD_MAX,ZFIELD_MIN,ZFIELD_MAX,FIELD_CLEARANCE,
+     &FIELD_MASK)
+      CALL EVALUATE_FLOW_POTENTIAL(DL,R,Z,FID,PSI,FIDWALL,PSICS,
+     &M,MHL,RFIELD,ZFIELD,NFR,NFZ,FIELD_MASK,PHIFIELD,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX,FIELD_INVALID)
+      CALL CALCULATE_FLOW_VELOCITY(PHIFIELD,RFIELD,ZFIELD,NFR,NFZ,
+     &FIELD_MASK,URFIELD,UZFIELD,UMAGFIELD,FIELD_INVALID)
+      CALL CALCULATE_FLOW_PRESSURE(PHIFIELD,PHIPREV,URFIELD,
+     &UZFIELD,FIELD_MASK,FIELD_MASK_PREV,NFR,NFZ,
+     &FIELD_TIME_CURRENT,FIELD_TIME_PREV,FIELD_HAVE_PREV,PC,P1INF,
+     &PSTARFIELD,PPAFIELD,FIELD_PRESSURE_READY,FIELD_INVALID)
+      IF (K.EQ.1.OR.MOD(K,FIELD_OUTPUT_EVERY).EQ.0) THEN
+      CALL WRITE_WALL_FLOW_ZONE(310,K,FIELD_TIME_CURRENT,RFIELD,
+     &ZFIELD,NFR,NFZ,PHIFIELD,URFIELD,UZFIELD,UMAGFIELD,
+     &PSTARFIELD,PPAFIELD,FIELD_MASK,FIELD_PRESSURE_READY,
+     &FIELD_INVALID)
+      ENDIF
+      CALL STORE_FLOW_SNAPSHOT(PHIFIELD,FIELD_MASK,NFR,NFZ,
+     &PHIPREV,FIELD_MASK_PREV)
+      FIELD_TIME_PREV=FIELD_TIME_CURRENT
+      FIELD_HAVE_PREV=.TRUE.
+      ENDIF
+      ENDIF
       DO  502  J=1,M
       DRDXI(J)=BR(J)+2.*CR(J)*(DLM(J)-DL(J))
      &+3.*DR(J)*((DLM(J)-DL(J))**2)
@@ -518,9 +506,9 @@ CSAL      WRITE(23,1223) FIDC(I,K)
       LS=1
       DO  1400  J=1,M-1
       IF(VM(J+1).LE.VM(J))  THEN
-	 VMAX=VM(J)  
-	 VM(J+1)=VM(J)
-	 LL=LS
+      VMAX=VM(J)  
+      VM(J+1)=VM(J)
+      LL=LS
       ENDIF
       VMAX=VM(J+1)
       LS=J+1
@@ -545,7 +533,7 @@ CSAL      WRITE(9,1371)(G1(J),G2(J),J=1,2*M)
 CSAL      WRITE(9,1369)
       ENDIF
 CSAL      PV=PC+EPS*(P1INF-PC)*((VOLI/VOLT)**1.4)
-	PV=PC+EPS*(P1INF-PC)*((VOLI/VOLT)**1.25)
+      PV=PC+EPS*(P1INF-PC)*((VOLI/VOLT)**1.25)
 CSAL      IF (ILS.EQ.1) THEN
 CSAL      WRITE(13,3063)PV
 CSAL 3063 FORMAT(F25.10)
@@ -554,9 +542,8 @@ CSAL      ENDIF
 CSAL	DFITD(J)=1.+.5*(UCP(J)**2+VCP(J)**2)
 CSAL	&-EPS*((VOLI/VOLT)**1.4)
 CSAL     &-(9.81*1000.*RM/(P1INF-PC))*(ZZ(J)-GAMA)
-	DFITD(J)=1.+.5*(UCP(J)**2+VCP(J)**2)
-	&-EPS*((VOLI/VOLT)**1.25)
-     &-(9.81*1000.*.000000001*RM/(P1INF-PC))*(ZZ(J)-GAMA)
+      DFITD(J)=1.+.5*(UCP(J)**2+VCP(J)**2)
+     &-EPS*((VOLI/VOLT)**1.25)
  555  CONTINUE 
       IF (ILS.EQ.1) THEN
       DO  810  J=1,M
@@ -578,9 +565,8 @@ CSAL     &-(9.81*1000.*RM/(P1INF-PC))*(ZZ(J)-GAMA)
 CSAL	DTD=ADFD/(1.+0.5*(VMAX)**2
 CSAL	&+EPS*((VOLI/VOLT)**1.4)
 CSAL     &-((1000.*9.81*RM)/(P1INF-PC))*(ZZ(LL)-GAMA))
-	DTD=ADFD/(1.+0.5*(VMAX)**2
-	&+EPS*((VOLI/VOLT)**1.25)
-     &-((1000.*9.81**.0000000001*RM)/(P1INF-PC))*(ZZ(LL)-GAMA))
+      DTD=ADFD/(1.+0.5*(VMAX)**2
+     &+EPS*((VOLI/VOLT)**1.25))
       DTIME=DTIME+DTD
       WRITE(12,161)DTIME
       ENDIF
@@ -679,34 +665,40 @@ CSAL      WRITE(44,938)PSIL(M+1)
       ENDIF
       DO  700  J=1,M+1
       IF(J.EQ.1) THEN
-	 R(J)=.0
-	 Z(J)=Z(J)+(DTD*VEP(1))
+      R(J)=.0
+      Z(J)=Z(J)+(DTD*VEP(1))
       ELSEIF (J.EQ.(M+1)) THEN
-	     R(J)=.0
-	     Z(J)=Z(J)+(DTD*VEP(M+1))
+      R(J)=.0
+      Z(J)=Z(J)+(DTD*VEP(M+1))
       ELSE
-	 R(J)=R(J)+DTD*UEP(J)
-	 Z(J)=Z(J)+DTD*VEP(J)
+      R(J)=R(J)+DTD*UEP(J)
+      Z(J)=Z(J)+DTD*VEP(J)
       ENDIF
  700  CONTINUE
-CSAL      CRITER1=Z(1)-Z(M+1)
-	  CRITER1=DABS(Z(1)-Z(M+1))
-      IF (CRITER1.LE.CRITER) THEN
-	WRITE(*,*) 'CRITER1 IS LESS THAN',CRITER
+      DO 701 J=1,M+1
+      IF (Z(J).LE.0.0) THEN
+      WRITE(*,*)'BUBBLE REACHED THE WALL AT POINT',J
       STOP
       ENDIF
-	DO 311  J=2,M
+ 701  CONTINUE
+CSAL      CRITER1=Z(1)-Z(M+1)
+      CRITER1=DABS(Z(1)-Z(M+1))
+      IF (CRITER1.LE.CRITER) THEN
+      WRITE(*,*) 'CRITER1 IS LESS THAN',CRITER
+      STOP
+      ENDIF
+      DO 311  J=2,M
 CSAL	IF (R(J).LT.0.02) THEN
-	IF (R(J).LT.0.0001) THEN
-	PRINT*,'R(J)<0.0001','J=',J,'R(J)=',R(J)
-	STOP
-	ENDIF
+      IF (R(J).LT.0.0001) THEN
+      PRINT*,'R(J)<0.0001','J=',J,'R(J)=',R(J)
+      STOP
+      ENDIF
   311	CONTINUE
 C *** Calculating of the cubic splines for the evolved shape of the bubble ***
 C *** and calculating of the arc lenght of the cubic spline segments.      ***
       DL(1)=0.0
       DO  518  J=2,M+1
-      DL(J)=DSQRT((R(J)+R(J-1))**2+(Z(J)-Z(J-1))**2)+DL(J-1)
+      DL(J)=DSQRT((R(J)-R(J-1))**2+(Z(J)-Z(J-1))**2)+DL(J-1)
  518  CONTINUE
       DO  519  LK=1,5
       CALL CUBSPLR (R,DL,AR,BR,CR,DR,M)
@@ -771,9 +763,7 @@ C *** collocation points at the mid of the equal sized cubic spline elements  **
       CALL CUSPZZ (DL,AZ,BZ,CZ,DZ,ZZ,M)
       CALL CUSPFID (DL,AFI,BFI,CFI,DFI,FID,M)
       MTE=1+MTE
-      M1TE=MTE/NMTE
-      M2TE=M1TE*NMTE
-CSAL      IF (MTE.EQ.M2TE) THEN
+      IF (MOD(MTE,NMTE).EQ.0) THEN
       CALL SMOOTH (R,Z,FID,R2R,Z2Z,FI2FI,M)
       DO 104 J=1,M+1
       R(J)=R2R(J+2)
@@ -788,7 +778,7 @@ CSAL      IF (MTE.EQ.M2TE) THEN
       CALL CUBSPLZ (Z,DL,AZ,BZ,CZ,DZ,M)
       CALL CUSPRR (DL,AR,BR,CR,DR,RR,M)
       CALL CUSPZZ (DL,AZ,BZ,CZ,DZ,ZZ,M)
-CSAL      ENDIF
+      ENDIF
  3457 CONTINUE
 C *** Calculating of the volume of the bubble ***
       CALL FINDVOL (DL,VOLT,M)
@@ -800,19 +790,20 @@ CSAL      WRITE(16,171)RATIO,CEN
 CSAL      WRITE(41,938)RATIO 
 CSAL      WRITE(42,938)CEN
 CSAL 171  FORMAT(1X,F12.5,5X,F12.5)
-	WRITE(14,6171)dtime,VOLT
-	WRITE(144,6171)1000.*dtime*RM*(1000./(P1INF-PC))**.5,VOLT
+      WRITE(14,6171)dtime,VOLT
+      WRITE(149,6171)dtime,(PV-PC)/(P1INF-PC)
+      WRITE(144,6171)1000.*dtime*RM*(D/(P1INF-PC))**.5,VOLT
       WRITE(12,6171)DTIME
       WRITE(13,6171)dtime,RATIO
-	WRITE(133,6171)1000.*dtime*RM*(1000./(P1INF-PC))**.5,RATIO
+      WRITE(133,6171)1000.*dtime*RM*(D/(P1INF-PC))**.5,RATIO
       WRITE(15,6171)dtime,CEN 
-	WRITE(155,6171)1000.*dtime*RM*(1000./(P1INF-PC))**.5,CEN 
+      WRITE(155,6171)1000.*dtime*RM*(D/(P1INF-PC))**.5,CEN 
  6171 FORMAT(F12.5,2x,f12.5) 
       ENDIF
 C***********************************************************************
 CSAL      DO  703  J=M+1,MN
 CCC	DO  703  J=M+1,MVL
-	DO  703  J=M+1,MHL
+      DO  703  J=M+1,MHL
       PSICS(J)=0.0
  703  CONTINUE
 CSAL      IF (ILS.EQ.2) THEN
@@ -824,27 +815,27 @@ CSAL 4228 FORMAT(1X,F12.7)
       IF (ILS.EQ.1) THEN
 CSAL      DO  838  J=M+1,MN
 CCC	DO  838  J=M+1,MVL
-	DO  838  J=M+1,MHL
+      DO  838  J=M+1,MHL
       FIDCINT1(J)=FIDC(J,K)
  838  CONTINUE
       ELSEIF (ILS.EQ.2) THEN
 CSAL      DO  839  J=M+1,MN
 CCC	DO  839  J=M+1,MVL
-	DO  839  J=M+1,MHL
+      DO  839  J=M+1,MHL
       FIDCINT2(J)=FIDC(J,K)
  839  CONTINUE
       ENDIF
       IF (ILS.EQ.1) THEN
 CSA;      DO  836  J=M+1,MN
 CCC	DO  836  J=M+1,MVL
-	DO  836  J=M+1,MHL
+      DO  836  J=M+1,MHL
       FIDCI(J)=FIDC(J,K)
  836  CONTINUE
       ENDIF
       IF (ILS.EQ.2) THEN
 CSAL      DO  837  J=M+1,MN
 CCC	DO  837  J=M+1,MVL
-	DO  837  J=M+1,MHL
+      DO  837  J=M+1,MHL
       FIDC(J,K)=FIDCI(J)
  837  CONTINUE
       ENDIF
@@ -868,7 +859,7 @@ CSAL      WRITE(35,*)(PSICS(J),J=M+1,MN)
 CCCSAL	WRITE(35,*)(PSICS(J),J=M+1,MVL)
 CCCSAL      WRITE(35,*)DTIME
 CCCSAL      ENDIF
-r	Dawoodian
+C	Dawoodian
 C	IF (ILS.EQ.2) THEN  
 C	WRITE(30,407)M+1
 C      WRITE(30,5071)(R(J),Z(J),UEP(J),VEP(J),
@@ -885,10 +876,10 @@ C5071	FORMAT(4F10.4)
 C      ENDIF
 C--SAL--(
       IF (ILS.EQ.2) THEN  
-	  WRITE(300,407)M+1
+      WRITE(300,407)M+1
       WRITE(300,5071)(R(J),Z(J),UEP(J),VEP(J),
      &J=1,M+1)
-	  WRITE(300,407)M+1
+      WRITE(300,407)M+1
       WRITE(300,5071)(-R(J),Z(J),-UEP(J),VEP(J),
      &J=1,M+1)
 CCC	WRITE(300,407)(MVL+2)-(M+2)
@@ -897,10 +888,10 @@ CCC     &J=(M+2),(MVL+2))
 CCC	WRITE(300,407)(MVL+2)-(M+2)
 CCC      WRITE(300,5071)(-R(J),Z(J),-UEP(J),VEP(J),
 CCC     &J=(M+2),(MVL+2))
-	WRITE(300,407)(MHL+2)-(M+2)
+      WRITE(300,407)MHL-M+1
       WRITE(300,5071)(R(J),Z(J),UEP(J),VEP(J),
      &J=(M+2),(MHL+2))
-	 WRITE(300,407)(MHL+2)-(M+2)
+      WRITE(300,407)MHL-M+1
       WRITE(300,5071)(-R(J),Z(J),-UEP(J),VEP(J),
      &J=(M+2),(MHL+2))
 407    FORMAT('ZONE  I=',I4, 'F=POINT')
@@ -908,10 +899,10 @@ CCC     &J=(M+2),(MVL+2))
       ENDIF
 
 C--SAL--)
-	IF (ILS.EQ.2) THEN
+      IF (ILS.EQ.2) THEN
       WRITE(*,*)'K=',K
       ENDIF
-	DO  392  J=1,M+1
+      DO  392  J=1,M+1
       GSC1(J)=R(J)
       GSC2(J)=Z(J)
   392 CONTINUE
@@ -921,24 +912,24 @@ C--SAL--)
   393 CONTINUE
     
 C----SALEKI---((
-	DO  3920  J=1,M+1
+      DO  3920  J=1,M+1
       GSC1(J)=R(J)
       GSC2(J)=Z(J)
-	UB(J)=UEP(J)
-	VB(J)=VEP(J)
+      UB(J)=UEP(J)
+      VB(J)=VEP(J)
  3920 CONTINUE
       DO  3930  J=1,M
       GSC1(M+J+1)=-GSC1(M-J+1)
       GSC2(M+J+1)=GSC2(M-J+1)
-	UB(M+J+1)=-UEP(M-J+1)
-	VB(M+J+1)=VEP(M-J+1)
+      UB(M+J+1)=-UEP(M-J+1)
+      VB(M+J+1)=VEP(M-J+1)
  3930 CONTINUE
-	  IF (ILS.EQ.2) THEN  
+      IF (ILS.EQ.2) THEN  
 cd      MSH=MSH+1
 cd      MSH1=MSH/8
 cd      MSH2=MSH1*8
 cd      IF(MSH2.EQ.MSH) THEN
-	  WRITE(30,40)2*M+1
+      WRITE(30,40)2*M+1
       WRITE(30,50)(GSC1(J),GSC2(J),UB(J),VB(J),
      &J=1,2*M+1)
 CCC	WRITE(30,40)2*(MVL-(M+2))+1
@@ -960,191 +951,16 @@ cd      ENDIF
       ENDIF
 
 C----SALEKI---))
-r	Dawoodian
+C	Dawoodian
 
-DAWOODIAN((&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
-	IF (ILS.EQ.2) THEN
-
-	IF(K==1.OR.K==44.OR.K==86.OR.K==92.OR.K==155.OR.
- 	&K==212.OR.
-	&K==2.OR.K==45.OR.K==87.OR.K==93.OR.K==156.OR.
-	&K==213) THEN
-IF(K==1.OR.K==44.OR.K==86.OR.K==134.OR.K==155.OR.
-C	IF(
-C 	&K==79.OR.
-C	&K==80.OR.K==81.OR.K==82.OR.K==83) THEN
-C  	IF(K==44.OR.K==45.OR.K==156.OR.K==157.OR.K==212.OR.
-C	&K==213) THEN
-
-	CALL COP1 (R,Z,RNIM,ZNIM,M,MHU,MCU,MOB,MCL,MHL,RM,FIP,KK
-  	& ,XYB,ZA,DWFI,DWFJ,DWDI,DWDJ,RCUD,RCLD,THICK)
-     
-	DO I=1,KK
-	IF (FIP(3,I)==1) THEN
-	FIPQ(I)=1
-	else
-	FIPQ(I)=0
-	END IF
-	END DO
-
-r	DO I=1,KK
-r	DO J=1,MN+122
-r	IF (FIP(1,I)==XYB(1,J) .AND. FIP(2,I)==XYB(2,J)) THEN
-r	FIPQ(I)=0
-r	END IF
-r	END DO
-r	END DO
-
-     
-	CALL DAWOODIAN_FFD (DL,R,Z,ZNIM,RNIM,FID,PSI,FIDCint1,
-	&PSICS,FDDW,M,Mhl,NK,KK,FIPQ,AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX)
-     
-	DO I=1,DWFI
-	DO J=1,DWFJ
-	DRR(I,J)=0.0
-	DZZ(I,J)=0.0
-J	DFDDW(I,J)=0.0
-	END DO
-	END DO
-
-	DO I=1,DWFI
-	DO J=1,DWFJ
-	DRR(I,J)=RNIM(J+DWFJ*(I-1))
-	DZZ(I,J)=ZNIM(J+DWFJ*(I-1))
-	IF (FIPQ(J+DWFJ*(I-1))/=1) THEN
-	DFDDW(I,J)=0.0
-      ELSE 
-	DFDDW(I,J)=FDDW(J+DWFJ*(I-1))
-	END IF
-	END DO
-	END DO
-
-
-	DO I=1,DWFI
-	DO J=1,DWFJ
-	IF (FIPQ(J+DWFJ*(I-1))/=1) THEN
-	UVDW(I,J)=0
-	UVDW(I,J-1)=0
-	DFDDW(I,J-1)=0
-	DFDDW(I,J)=0
-
-	ELSE
-
-	DUDW(I,J)=(DFDDW(I+1,J)-DFDDW(I-1,J))/(2*DWDI)
-	DVDW(I,J)=(DFDDW(I,J+1)-DFDDW(I,J-1))/(2*DWDJ)
-	UVDW(I,J)=DSQRT((DUDW(I,J)**2)+(DVDW(I,J)**2))
-
-	DUVDW(J+DWFJ*(I))=UVDW(I,J)
-	END IF
-	END DO
-	END DO
-
-j	CALL DAWOODIAN_PDW (DL,R,Z,ZNIM,RNIM,UVDW,FID,PSI,FFID,
-j	&FPSIRES,FDDW,PPDW,P1INF,PC,DTD,KK,K,M,MN,NK,FIPQ)
-
-
-j	IF (K/=1) THEN
-	DO I=1,DWFI
-	DO J=1,DWFJ
-	IF (FIPQ(J+DWFJ*(I-1))==1) THEN
-      PDW(I,J)=1-((DFDDW(I,J)-DFDDW1(I,J))/DTD-0.5*(UVDW(I,J)**2))
-c	+50
-j     &*(P1INF-PC)+P1INF
-j	pdw(i,j)=(pdw(i,j)-pc)/(P1INF-Pc)
-	ELSE IF (FIPQ(J+DWFJ*(I-1))/=1) THEN
-	PDW(I,J)=0.0
-	END IF
-	END DO
-	END DO
-j	END IF
-j	print*,dfddw1
-
-	DO I=1,DWFI
-	DO J=1,DWFJ
-J	IF (FIPQ(J+DWFJ*(I-1))==0) THEN
-	IF ((FIPQ(J+DWFJ*(I))==0) 
- 	*.OR.(FIPQ(J+DWFJ*(I-2))==0).OR.(FIPQ(J+1+DWFJ*(I-1))==0)
-     *.OR.(FIPQ(J-1+DWFJ*(I-1))==0)) THEN
-	DUDW(I,J)=0.0
-	DVDW(I,J)=0.0
-J	UVDW(I,J)=0.0
-J	PDW(I,J)=0.0
-	END IF
-J	END IF
-	END DO
-	END DO
-
-	DO I=1,DWFI
-	DO J=1,DWFJ
-	IF (FIPQ(J+DWFJ*(I-1))==0) THEN
-	DUDW(I,J)=0.0
-	DVDW(I,J)=0.0
-	UVDW(I,J)=0.0
-	PDW(I,J)=0.0
-	END IF
-	END DO
-	END DO
-
-
-	DO I=1,DWFI
-	DO J=1,DWFJ
-	DFDDW1(I,J)=DFDDW(I,J)
-	END DO
-	END DO
-
-
-j	DO I=1,DWFI
-j	DO J=1,DWFJ
-j	PDW(I,J)=PPDW(J+DWFJ*(I-1))
-j	END DO
-j	END DO
-	
-j	if (k==2) then
-m	sss=1
-m      do j=1,MN+1
-m	WRITE(102,314) 100.0*R(J),100.0*Z(J),sss
-m  314 format(f10.2,2x,f10.2,2x,f10.2,2X,F10.2)
-m	sss=sss+1
-m	end do
-m	WRITE(102,*) 'end of step',' k=',k
-j	end if
-
-C	If (K==81.OR. K==80.OR.K==82.or.k==83) then
-C      	IF(K==45.OR.K==157.OR.K==213)THEN			   
-      IF(K==2.OR.K==45.OR.K==87.OR.K==93.OR.K==156.OR.
-	&K==213)THEN		   
-	Write(100,*) "zone  J=",DWFI,"I=",DWFJ,"f=point"
-	Write(101,*) "zone  J=",DWFI,"I=",DWFJ,"f=point"
-	DO I=1,DWFI
-	DO J=1,dwfj
-	WRITE(100,*) DRR(I,J),DZZ(I,J),PDW(I,J)
-	WRITE(101,*) -1.0*DRR(I,J),DZZ(I,J),-1.0*DUDW(I,J),DVDW(I,J)
-J	FIPQ(J+DWFJ*(I-1))
-	END DO
-	END DO
-
-	GSC1(2*M+1)=GSC1(1)
-	GSC2(2*M+1)=GSC2(1)
-	WRITE(102,4040)2*M+1
-      WRITE(102,5050)(GSC1(J),GSC2(J),UEP(J),VEP(J),J=1,2*M+1)
-	WRITE(103,4040)2*(Mhl+2-(M+2))+1
-	WRITE(103,4040)2*(MVL+2-(M+2))+1
-	WRITE(103,5050)(R(J),Z(J),UEP(J),VEP(J),J=M+2,MN+2)
-      WRITE(103,5050)(R(J),Z(J),UEP(J),VEP(J),J=M+2,MVL+2)
-      WRITE(103,5050)(-R(J),Z(J),-UEP(J),VEP(J),J=MN+1,M+2,-1)
-	WRITE(103,5050)(-R(J),Z(J),-UEP(J),VEP(J),J=MVL+1,M+2,-1)
-4040    FORMAT('ZONE  I=',I4, 'F=POINT')
-5050	FORMAT(4F10.4)										 
-
-	end if
-
-
-312   format(f10.5,2x,f10.5,2x,f10.5,2X,F10.5)
-	END IF
- 	end if
-
-CDAWOODIAN)))&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
-	
+C=======================================================================
+C     LEGACY/UNUSED DAWOODIAN FIELD DRIVER
+C     The former IF (.FALSE.) block was tied to the obsolete bilge
+C     geometry and contained index-zero/N+1 finite differences.  It has
+C     been replaced by the flat-wall post-processing call above.  The
+C     original legacy helper routines remain labelled below for history.
+C=======================================================================
+      
 
 
 
@@ -1300,15 +1116,15 @@ CSAL      ENDIF
       ILS=1
       ENDIF
  200  CONTINUE
-endstart
-	  
+Cndstart
+      
       STOP
       END
 C***********************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
-      SUBROUTINE GAUSS(DL,ENT1,ENT2,I,J,X)
+      SUBROUTINE GAUSS(DL,ENT1,ENT2,I,J)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -1388,7 +1204,7 @@ C******************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE GAUSSCOM (FU1,FU2,ENT1,ENT2,I,J)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -1501,7 +1317,7 @@ C******************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE GAUSSCOM1 (FU1,ENT1,I,J,X)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -1559,9 +1375,9 @@ C     WRITE(*,400)ENT1,ENT2,ENT3,ENT4
       END
 C******************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
-      SUBROUTINE HAKIM1(FU11,ENT3,I,J,X)
+      SUBROUTINE HAKIM1(FU11,ENT3,I,J)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -1614,7 +1430,7 @@ C***********************************************************************
 C     SUBROUTINE SINGULAR GAUSSIAN QUADRATURE
       SUBROUTINE SING1(FU12,ENT5,I,J,Y)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -1674,7 +1490,7 @@ C***********************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE GAUSSCOM2 (DL,ENT11,I,J)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -1791,7 +1607,7 @@ C******************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE HAKIM(FU11,FU21,ENT3,ENT4,I,J,X)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -1881,7 +1697,7 @@ C***********************************************************************
 C     SUBROUTINE SINGULAR GAUSSIAN QUADRATURE
       SUBROUTINE SING(FU12,FU22,FU23,ENT5,ENT6,ENT7,I,J,Y)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -1999,7 +1815,7 @@ C***********************************************************************
 C     SUBROUTINE PARTIAL PIVOTING GAUSS ELIMINATION
       SUBROUTINE PARPI(A,PSI,LR,MN)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -2015,28 +1831,28 @@ C     SUBROUTINE PARTIAL PIVOTING GAUSS ELIMINATION
       DO  500  K=1,MN
 C     CHOOSE PIVOTE
       P=.0
-	 DO  600  I=1,MN
-	 IF ((K).GT.1) THEN
-	    DO  700  L=1,K-1
-	    IF((I).EQ.LR(L))  GOTO  600
+      DO  600  I=1,MN
+      IF ((K).GT.1) THEN
+      DO  700  L=1,K-1
+      IF((I).EQ.LR(L))  GOTO  600
  700        CONTINUE
-	 ENDIF
-	 IF (ABS(A(I,K)).LE.ABS(P)) GOTO  600
-	 P=A(I,K)
-	 LR(K)=I
+      ENDIF
+      IF (ABS(A(I,K)).LE.ABS(P)) GOTO  600
+      P=A(I,K)
+      LR(K)=I
  600     CONTINUE
-	 D1=D1*P
-	 IF (P.EQ..0) GOTO  800
-	 P0=1./P
-	 IF((K).EQ.(MN))  GOTO  500
+      D1=D1*P
+      IF (P.EQ..0) GOTO  800
+      P0=1./P
+      IF((K).EQ.(MN))  GOTO  500
 C        ELIMINATION PROCEDURE
-	 DO   900  I=1,MN
-	    DO  1000  L=1,K
-	    IF((I).EQ.LR(L))  GOTO  900
+      DO   900  I=1,MN
+      DO  1000  L=1,K
+      IF((I).EQ.LR(L))  GOTO  900
  1000       CONTINUE
-	 F=A(I,K)*P0
-	    DO  1100  J=K,(MN+1)
-	    A(I,J)=A(I,J)-A(LR(K),J)*F
+      F=A(I,K)*P0
+      DO  1100  J=K,(MN+1)
+      A(I,J)=A(I,J)-A(LR(K),J)*F
  1100       CONTINUE
  900     CONTINUE
  500  CONTINUE
@@ -2044,8 +1860,8 @@ C     BACK SUBSTITUTION
       DO  1200  I=MN,1,-1
       S=A(LR(I),(MN+1))
       IF ((I).LT.MN) THEN
-	 DO  1300  J=MN,I+1,-1
-	 S=S-A(LR(I),(J))*PSI(J)
+      DO  1300  J=MN,I+1,-1
+      S=S-A(LR(I),(J))*PSI(J)
  1300    CONTINUE 
       ENDIF
       PSI(I)=S/A(LR(I),I)
@@ -2084,7 +1900,7 @@ C NX: ROW AND COLUMN DIMENSION OF A
 C 
       SUBROUTINE SLNPD(A,B,D,N,NX)
       IMPLICIT REAL*8(A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION B(NPA),A(NPA,NPA)
 C      PRINT *,'N=',N,'NX= ',NX
 C       DO 55 I=1,N
@@ -2156,7 +1972,7 @@ C
 C***********************************************************************
       SUBROUTINE SMOOTH(R,Z,FID,R2R,Z2Z,FI2FI,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),FID(NPA),R1R(NPA),Z1Z(NPA),
      &          FI1FI(NPA),R2R(NPA),Z2Z(NPA),FI2FI(NPA)
       R1R(1)=-R(3)
@@ -2201,7 +2017,7 @@ C     * extrapolation.                                                 *
 C     ******************************************************************  
       SUBROUTINE FINDPSI2 (PSI,DH,PSIL2,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DH1(NPA),DH(NPA)
       DIMENSION DL1(NPA),PSI(NPA)
       DIMENSION APSI2(NPA),BPSI2(NPA),CPSI2(NPA),DPSI2(NPA)
@@ -2239,7 +2055,7 @@ C     * extrapolation.                                                 *
 C     ******************************************************************  
       SUBROUTINE FINDPSI1 (PSI,DH,PSIL1,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DH(NPA),DH1(NPA),DH11(NPA)
       DIMENSION DL1(NPA),PSI(NPA),PSI1(NPA)
       DIMENSION APSI1(NPA),BPSI1(NPA),CPSI1(NPA),DPSI1(NPA)
@@ -2284,7 +2100,7 @@ C ***    and it is calculated for any future use. ***
 C***********************************************************************
       SUBROUTINE EXCSPSI (APSIS,DHS,BE,CE,DE,M)                             
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DHS(NPA)
       DIMENSION EH(NPA),APSIS(NPA)
       DIMENSION AE(NPA,NPA)
@@ -2323,7 +2139,7 @@ C***********************************************************************
 C***********************************************************************
       SUBROUTINE EXCUSP1 (AE,EX,NP)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION AE(NPA,NPA)
       DIMENSION EL(NPA,NPA),EU(NPA,NPA),EZ(NPA)
       DIMENSION EX(NPA)
@@ -2354,7 +2170,7 @@ C     * of the interpolated curve.                                     *
 C     ******************************************************************
       SUBROUTINE CUSPPSI (PSI,DH,PL1,PL2,DL2,APSI,BPSI,CPSI,DPSI,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION PSI(NPA),DL2(NPA)
       DIMENSION DH(NPA),DH12(NPA),ALF(NPA)
       DIMENSION AEL(NPA),AMU(NPA),AZI(NPA)
@@ -2442,7 +2258,7 @@ C     * bubble and the vertical axis.                                  *
 C     ******************************************************************
       SUBROUTINE FINDPSIL (DL2,DH,APSI,BP,CP,DP,PSIL,M)      
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DL2(NPA),DH(NPA),DL3(NPA)
       DIMENSION APSI(NPA),BP(NPA),CP(NPA),DP(NPA)
       DIMENSION PSIL(NPA)
@@ -2479,7 +2295,7 @@ C     * end points of the elements.                                    *
 C     ******************************************************************
       SUBROUTINE REDISR (DL,EQDL,AR,BR,CR,DR,RN,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DL(NPA)
       DIMENSION DLN(NPA),RN(NPA)
       DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
@@ -2506,7 +2322,7 @@ C     * end points of the elements.                                    *
 C     ******************************************************************
       SUBROUTINE REDISZ (DL,EQDL,AZ,BZ,CZ,DZ,ZN,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DL(NPA)
       DIMENSION DLN(NPA),ZN(NPA)
       DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
@@ -2533,7 +2349,7 @@ C     * points at the end points of the elements.                      *
 C     ******************************************************************
       SUBROUTINE REDISFI (DL2,EQDL,AFI,BFI,CFI,DFI,FIDLN,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DL2(NPA),FIDLN(NPA)
       DIMENSION DLN(NPA)
       DIMENSION AFI(NPA),BFI(NPA),CFI(NPA),DFI(NPA)
@@ -2560,7 +2376,7 @@ C     * assuming elements as cubic splines.                            *
 C     ******************************************************************
       SUBROUTINE CUSPRR (DL,AR,BR,CR,DR,RR,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DL(NPA),DLM(NPA)
       DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
       DIMENSION RR(NPA)
@@ -2581,7 +2397,7 @@ C     * assuming elements as cubic splines.                            *
 C     ******************************************************************
       SUBROUTINE CUSPZZ (DL,AZ,BZ,CZ,DZ,ZZ,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DL(NPA),DLM(NPA)
       DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
       DIMENSION ZZ(NPA)
@@ -2604,7 +2420,7 @@ C     * with respect to the arc lenght of the (bubble) boundary.       *
 C     ****************************************************************** 
       SUBROUTINE CUSPFID (DL,AFI,BFI,CFI,DFI,FID,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DL(NPA),DLM(NPA)
       DIMENSION AFI(NPA),BFI(NPA),CFI(NPA),DFI(NPA)
       DIMENSION FID(NPA)
@@ -2625,7 +2441,7 @@ C     * points of the equal sized elements.                            *
 C     ******************************************************************
       SUBROUTINE FINDVOL (DL,VOLT,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/SPLR/AR,BR,CR,DR
       COMMON/SPLZ/AZ,BZ,CZ,DZ
       DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
@@ -2648,7 +2464,7 @@ C     * points of the equal sized elements.                            *
 C     ******************************************************************
       SUBROUTINE FINDCEN (DL,CEN,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/SPLR/AR,BR,CR,DR
       COMMON/SPLZ/AZ,BZ,CZ,DZ
       DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
@@ -2672,7 +2488,7 @@ C     ******************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE ARLEGAUS (DL,ARCL,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/SPLR/AR,BR,CR,DR
       COMMON/SPLZ/AZ,BZ,CZ,DZ
       DIMENSION ARCL(NPA)
@@ -2714,7 +2530,7 @@ C     ******************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE VOLGAUS (DL,ENTVOL,J)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/SPLR/AR,BR,CR,DR
       COMMON/SPLZ/AZ,BZ,CZ,DZ
       DIMENSION DL(NPA)
@@ -2756,7 +2572,7 @@ C     ******************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE CENGAUS (DL,ENTC1,ENTC2,J)       
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/SPLR/AR,BR,CR,DR
       COMMON/SPLZ/AZ,BZ,CZ,DZ
       DIMENSION DL(NPA)
@@ -2779,11 +2595,14 @@ C     SUBROUTINE GAUSSIAN QUADRATURE
       SUM2=0.0
       DO  100  L=1,5
       XI=(XXX(L)*(BB-AA)+BB+AA)/2.
+      FUR=AR(J)+BR(J)*(XI-DL(J))
+     &+CR(J)*((XI-DL(J))**2)+DR(J)*((XI-DL(J))**3)
       FUZ=AZ(J)+BZ(J)*(XI-DL(J))
      &+CZ(J)*((XI-DL(J))**2)+DZ(J)*((XI-DL(J))**3)
       FUJAC=BR(J)+2.*CR(J)*(XI-DL(J))+3.*DR(J)*((XI-DL(J))**2)
-      FU1=0.5*((FUZ)**2)*FUJAC
-      FU2=FUZ*FUJAC
+C     FIRST MOMENT AND VOLUME FROM AXISYMMETRIC VOLUME INTEGRALS.
+      FU1=3.141592653589793*FUR*(FUZ**2)*FUJAC
+      FU2=2.*3.141592653589793*FUR*FUZ*FUJAC
       SUM1=SUM1+FU1*AAA2(L)
       SUM2=SUM2+FU2*AAA2(L)
  100  CONTINUE
@@ -2799,7 +2618,7 @@ C     * interpolated curve.                                            *
 C     ******************************************************************
       SUBROUTINE CUBSPLR (R,DL,AR,BR,CR,DR,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),DL(NPA)
       DIMENSION DH(NPA),ALF(NPA)
       DIMENSION AEL(NPA),AMU(NPA),AZI(NPA)
@@ -2847,7 +2666,7 @@ C     * interpolated curve.                                            *
 C     ******************************************************************
       SUBROUTINE CUBSPLZ (Z,DL,AZ,BZ,CZ,DZ,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION Z(NPA),DL(NPA)
       DIMENSION DH(NPA),ALF(NPA)
       DIMENSION AEL(NPA),AMU(NPA),AZI(NPA)
@@ -2895,7 +2714,7 @@ C     * extrapolation.                                                 *
 C     ******************************************************************  
       SUBROUTINE FINDFIF2 (FID,DH,FIDL2,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DH1(NPA),DH(NPA)
       DIMENSION DL1(NPA),FID(NPA)
       DIMENSION AFI2(NPA),BFI2(NPA),CFI2(NPA),DFI2(NPA)
@@ -2933,7 +2752,7 @@ C     * extrapolation.                                                 *
 C     ******************************************************************  
       SUBROUTINE FINDFIF1 (FID,DH,FIDL1,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DH(NPA),DH1(NPA),DH11(NPA)
       DIMENSION DL1(NPA),FID(NPA),FID1(NPA)
       DIMENSION AFI1(NPA),BFI1(NPA),CFI1(NPA),DFI1(NPA)
@@ -2978,7 +2797,7 @@ C ***    and it is calculated for any future use. ***
 C***********************************************************************
       SUBROUTINE EXCUSPFI (AFIS,DHS,BE,CE,DE,M)                             
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION DHS(NPA)
       DIMENSION EH(NPA),AFIS(NPA)
       DIMENSION AE(NPA,NPA)
@@ -3017,7 +2836,7 @@ C***********************************************************************
 C***********************************************************************
       SUBROUTINE EXCUSP (AE,EX,NP)
       IMPLICIT DOUBLE PRECISION(A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION AE(NPA,NPA)
       DIMENSION EL(NPA,NPA),EU(NPA,NPA),EZ(NPA)
       DIMENSION EX(NPA)
@@ -3048,7 +2867,7 @@ C     * the interpolated curve.                                        *
 C     ******************************************************************
       SUBROUTINE CUBSPLFI (FID,DH,FIDL1,FIDL2,DL2,AFI,BFI,CFI,DFI,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION FID(NPA),DL2(NPA)
       DIMENSION DH(NPA),DH12(NPA),ALF(NPA)
       DIMENSION AEL(NPA),AMU(NPA),AZI(NPA)
@@ -3112,7 +2931,7 @@ C     * points of the equal sized elements.                            *
 C***********************************************************************
       SUBROUTINE CUSPFUFI (FIDL,DL,AFI,BFI,CFI,DFI,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION FIDL(NPA),DL(NPA),DH(NPA)
       DIMENSION ALF(NPA)
       DIMENSION AEL(NPA),AMU(NPA),AZI(NPA)
@@ -3152,7 +2971,7 @@ C***********************************************************************
 C***********************************************************************
       SUBROUTINE FINDP1 (FIDCINT1,FIDCINT2,PCOM,P1INF,PC,DTD,K,M,MN)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION PCOM(NPA),FIDCINT1(NPA),FIDCINT2(NPA)
 C      D=1000.
       DO  1  J=M+1,MN
@@ -3163,7 +2982,7 @@ C      D=1000.
 C******************************************************************
       SUBROUTINE FINDP (FIDC,PCOM,P1INF,PC,DTD,K,M,MN)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION PCOM(NPA),FIDC(200,200)
 C      D=1000.
       DO  1  J=M+1,MN
@@ -3174,7 +2993,7 @@ C      D=1000.
 C******************************************************************
       SUBROUTINE SMOOTH1 (PCOM,ILS,M,MN)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION PCOM(NPA),PCOM1(NPA)
 C      OPEN (UNIT=24,FILE='PRESCOM',STATUS='OLD')
       PCOM1(M)=PCOM(M+1)
@@ -3200,7 +3019,7 @@ C***********************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE GCOM (FU1,FU2,ENT1,ENT2,I,J)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -3248,12 +3067,32 @@ C     WRITE(*,400)ENT1,ENT2,ENT3,ENT4
       RETURN
       END
 C******************************************************************
+C     DEFINE A FINITE, FLAT, AXISYMMETRIC RIGID WALL AT Z=0.
+C     ENDPOINTS ARE STORED IN M+2:MHL+2; COLLOCATION POINTS ARE
+C     STORED IN M+1:MHL. WALLR IS NORMALIZED BY THE MAXIMUM BUBBLE
+C     RADIUS. A LARGE WALLR APPROXIMATES AN INFINITE PLANE.
+      SUBROUTINE DEFINEWALL (R,Z,RR,ZZ,M,MHL,WALLR)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
+      DWALL=WALLR/(MHL-M)
+      DO 1 J=M+2,MHL+2
+      R(J)=(J-M-2)*DWALL
+      Z(J)=0.0
+ 1    CONTINUE
+      DO 2 J=M+1,MHL
+      RR(J)=0.5*(R(J+1)+R(J+2))
+      ZZ(J)=0.0
+ 2    CONTINUE
+      RETURN
+      END
+C******************************************************************
       SUBROUTINE DEFINE2 (R,Z,RR,ZZ,RM,DELTAZ,DIAM,M,MN)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),ALF(NPA)
 C      RMD=RM/RM
-	Z(M+2)=-DELTAZ*((MN-M)/2)
+      Z(M+2)=-DELTAZ*((MN-M)/2)
       DO  1  J=M+3,MN+2
       Z(J)=Z(J-1)+DELTAZ
  1    CONTINUE
@@ -3269,11 +3108,11 @@ C      RMD=RM/RM
 C*****************SALEKI********************************************
       SUBROUTINE DEFINE21 (R,Z,RR,ZZ,RM,DIAM,M,MVU,HH,RMD,N,RCUD,TETACU)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),ALF(NPA)
 C      RMD=RM/RM
-	Z(M+2)=N*RMD-RCUD+RCUD*COS(TETACU)
-	DELTAZ=HH/(MVU-M)
+      Z(M+2)=N*RMD-RCUD+RCUD*COS(TETACU)
+      DELTAZ=HH/(MVU-M)
       DO  1  J=M+3,MVU+2
       Z(J)=Z(J-1)-DELTAZ
  1    CONTINUE
@@ -3289,17 +3128,17 @@ C      RMD=RM/RM
       END
 C*******************SALEKI**********************************************
       SUBROUTINE DEFINE20 (R,Z,RR,ZZ,RM,HH,M,MHU,THICK,RCUD,TETACU)
-	IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
-	Z(MHU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETACU)
-	R(MHU+2)=RCUD*SIN(TETACU)
-	R(M+2)=R(MHU+2)+HH*SIN(TETACU)
-	Z(M+2)=Z(MHU+2)-HH*COS(TETACU)
-	DELTAH=HH/(MHU-M)
-	DO  1  J=M+3,MHU+2
-	Z(J)=Z(J-1)+DELTAH*COS(TETACU)
-	R(J)=R(J-1)-DELTAH*SIN(TETACU)
+      Z(MHU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETACU)
+      R(MHU+2)=RCUD*SIN(TETACU)
+      R(M+2)=R(MHU+2)+HH*SIN(TETACU)
+      Z(M+2)=Z(MHU+2)-HH*COS(TETACU)
+      DELTAH=HH/(MHU-M)
+      DO  1  J=M+3,MHU+2
+      Z(J)=Z(J-1)+DELTAH*COS(TETACU)
+      R(J)=R(J-1)-DELTAH*SIN(TETACU)
  1    CONTINUE
 C      Z(MHU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETACU)
 C	R(MHU+2)=RCUD*SIN(TETACU)
@@ -3311,24 +3150,24 @@ C	R(MHU+2)=RCUD*SIN(TETACU)
       RETURN
       END
 C*******************SALEKI**********************************************
-	SUBROUTINE DEFINE10 (R,Z,RR,ZZ,RM,RCUD,MHU,MCU,TETACU,THICK,
-	&TETAC,DIAMETERD)
-	IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      SUBROUTINE DEFINE10 (R,Z,RR,ZZ,RM,RCUD,MHU,MCU,TETACU,THICK,
+     &TETAC,DIAMETERD)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
 CCC	TT=(3.14159265/2.-TETA-TETACU)/(MCU-MHU)
       TETAB=ASIN((((DIAMETERD+THICK)/2.)/(RCUD)))
-	TT=(TETACU-TETAb)/(MCU-MHU)
-	R(MHU+2)=RCUD*SIN(TETACU)
-	Z(MHU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETACU)
-	DO 1 J= MHU+2,MCU+2
-	R(J)=RCUD*SIN(TETACU-(J-MHU-2)*TT)
-	Z(J)=-(RCUD+THICK/2.)+RCUD*COS(TETACU-(J-MHU-2)*TT)
+      TT=(TETACU-TETAb)/(MCU-MHU)
+      R(MHU+2)=RCUD*SIN(TETACU)
+      Z(MHU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETACU)
+      DO 1 J= MHU+2,MCU+2
+      R(J)=RCUD*SIN(TETACU-(J-MHU-2)*TT)
+      Z(J)=-(RCUD+THICK/2.)+RCUD*COS(TETACU-(J-MHU-2)*TT)
 1     CONTINUE
 c	R(MCU+2)=RCUD*SIN(TETAC)
 c	Z(MCU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETAC)
       Z(MCU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETAB)
-	R(MCU+2)=(DIAMETERD+THICK)/2.
+      R(MCU+2)=(DIAMETERD+THICK)/2.
 CCC	  DO J=MHU+2,MCU+2
 CCC	  WRITE(1111,*)J,R(J),Z(J)
 CCC	  ENDDO
@@ -3340,42 +3179,42 @@ CCC	  ENDDO
       END
 c************************************************************
       SUBROUTINE DEFINE69(R,Z,RR,ZZ,RM,RCLD,RCUD,DIAMETERD,MCU,
-  	&MOB,THICK)
-	IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
-	DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
+     &MOB,THICK)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
 C	DELTAOB=THICK/(MOB-MCU)
-	TETAL=ASIN((((DIAMETERD+THICK)/2.)/(RCLD)))
-	TETAB=ASIN((((DIAMETERD+THICK)/2.)/(RCUD)))
-	Z(MCU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETAB)
-	Z(MOB+2)=-(RCUD+THICK/2.)+RCLD*COS(TETAL)
+      TETAL=ASIN((((DIAMETERD+THICK)/2.)/(RCLD)))
+      TETAB=ASIN((((DIAMETERD+THICK)/2.)/(RCUD)))
+      Z(MCU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETAB)
+      Z(MOB+2)=-(RCUD+THICK/2.)+RCLD*COS(TETAL)
 C	tetas=acos((z(mcu+2))/(thick/2.))
 C	rs=(thick/2.)*sin(tetas)
 C	tetan=acos((z(mob+2))/(thick/2.))
 C	ttk=(tetan-tetas)/mob-mcu
 
-	TT=(3.14159265)/(MOB-MCU)												    
+      TT=(3.14159265)/(MOB-MCU)												    
       R(McU+2)=(DIAMETERD+THICK)/2.
 C	R(MCU+2)=RCUD*SIN(TETAB)
-	R(MOB+2)=(DIAMETERD+THICK)/2.
+      R(MOB+2)=(DIAMETERD+THICK)/2.
 C	R(MOB+2)= RCLD*SIN(TETAL)
 C	Z(MCU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETAB)
 C	Z(MOB+2)=-(RCUD+THICK/2.)+RCLD*COS(TETAL)
 c	Z(MOB+2)=THICK/2.
 c	Z(MCU+2)=-THICK/2.
       DELTAP=(Z(MOB+2)-Z(MCU+2))/(MOB-MCU)
-    	DELTAz=(Z(MOB+2)-Z(MCU+2))/2.
+      DELTAz=(Z(MOB+2)-Z(MCU+2))/2.
 
 C		DO  1  J=MCU+3,MOB+2
 C  	Z(J)=Z(J-1)+DELTAP
 C1     CONTINUE
 
-	DO  3  J=MCU+3,MOB+1
+      DO  3  J=MCU+3,MOB+1
 c	R(J)=DIAMETERD/(2.)
 C      R(J)=DIAMETERD/2.
 C      z(j)=(-thick/2.)*cos(tetas+((j-mcu-2)*ttk))
-	Z(J)=-deltaz*COS((J-MCU-2)*TT)-(RCUD+THICK/2.)+
-	&RCUD*COS(TETAB)+deltaz
+      Z(J)=-deltaz*COS((J-MCU-2)*TT)-(RCUD+THICK/2.)+
+     &RCUD*COS(TETAB)+deltaz
 c	Z(J)=deltaz*COS(tetal-(J-Mob-2)*TT)+(RCUD+THICK/2.)-
 c	&RClD*COS(TETAl)+deltaz
 c	Z(J)=-Z(MCU+2)*COS((J-MCU-2)*TT)
@@ -3386,7 +3225,7 @@ c	R(J)=((RCUD*SIN(TETAL))+((-(RCUD+THICK/2.)+
 c	&RCUD*COS(TETAB))*SIN((J-MCU-2)*TT)))
 C      r(j)=(diameterd/2.)-rs+(thick/2.)-((thick/2.)*
 C	&sin(tetas+((j-mcu-2)*ttk)))
-	R(J)=((DIAMETERD+THICK)/2.)-((THICK/2.)*SIN((J-MCU-2)*TT))
+      R(J)=((DIAMETERD+THICK)/2.)-((THICK/2.)*SIN((J-MCU-2)*TT))
 C  	DO 1 J= MCU+2,MOB+2
 C	Z(J)=-(RCUD+THICK/2.)+(RCUD+(J-MCU-2)*DELTAOB)*COS(TETAC)
 C      Z(J)=-THICK/2+(DELTAOB*(J-MCU-2))
@@ -3404,19 +3243,19 @@ C	Z(MOB+2)=THICK/2.
       END
 
 C*******************SALEKI**********************************************
-	SUBROUTINE DEFINE60 (R,Z,RR,ZZ,RM,RCLD,RCUD,TETAC,MCU,MOB,THICK)
-	IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
-	DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
-	DELTAOB=THICK/(MOB-MCU)
-	R(MCU+2)=RCUD*SIN(TETAC)
-	Z(MCU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETAC)
-  	DO 1 J= MCU+2,MOB+2
-	Z(J)=-(RCUD+THICK/2.)+(RCUD+(J-MCU-2)*DELTAOB)*COS(TETAC)
-	R(J)=(RCUD+(J-MCU-2)*DELTAOB)*SIN(TETAC)
+      SUBROUTINE DEFINE60 (R,Z,RR,ZZ,RM,RCLD,RCUD,TETAC,MCU,MOB,THICK)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
+      DELTAOB=THICK/(MOB-MCU)
+      R(MCU+2)=RCUD*SIN(TETAC)
+      Z(MCU+2)=-(RCUD+THICK/2.)+RCUD*COS(TETAC)
+      DO 1 J= MCU+2,MOB+2
+      Z(J)=-(RCUD+THICK/2.)+(RCUD+(J-MCU-2)*DELTAOB)*COS(TETAC)
+      R(J)=(RCUD+(J-MCU-2)*DELTAOB)*SIN(TETAC)
 1     CONTINUE
-	R(MOB+2)=RCLD*SIN(TETAC)
-	Z(MOB+2)=-(RCUD+THICK/2.)+RCLD*COS(TETAC)
+      R(MOB+2)=RCLD*SIN(TETAC)
+      Z(MOB+2)=-(RCUD+THICK/2.)+RCLD*COS(TETAC)
       DO  7  J=MCU+1,MOB
       RR(J)=(R(J+1)+R(J+2))/2.
       ZZ(J)=(Z(J+1)+Z(J+2))/2.
@@ -3425,23 +3264,23 @@ C*******************SALEKI**********************************************
       END
 C*******************SALEKI**********************************************
 
-	SUBROUTINE DEFINE50 (R,Z,RR,ZZ,RM,RCLD,RCUD,TETACU,TETAC,MOB,MCL,
-	&THICK,DIAMETERD)
-	IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      SUBROUTINE DEFINE50 (R,Z,RR,ZZ,RM,RCLD,RCUD,TETACU,TETAC,MOB,MCL,
+     &THICK,DIAMETERD)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
-	R(MOB+2)=(DIAMETERD+THICK)/2
-	TETAL=ASIN((((DIAMETERD+THICK)/2.)/(RCLD)))
+      R(MOB+2)=(DIAMETERD+THICK)/2
+      TETAL=ASIN((((DIAMETERD+THICK)/2.)/(RCLD)))
 c	R(MOB+2)=RCLD*SIN(TETAC)
 c 	Z(MOB+2)=-(RCUD+THICK/2.)+RCLD*COS(TETAC)
       Z(MOB+2)=-(RCUD+(THICK/2.))+RCLD*COS(TETAL)
-	TTL=(TETACU-TETAl)/(MCL-MOB)
-	DO 1 J= MOB+3,MCL+2
-	R(J)=RCLD*SIN(TETAl+(J-MOB-2)*TTL)
-	Z(J)=-(RCUD+THICK/2.)+RCLD*COS(TETAl+(J-MOB-2)*TTL)
+      TTL=(TETACU-TETAl)/(MCL-MOB)
+      DO 1 J= MOB+3,MCL+2
+      R(J)=RCLD*SIN(TETAl+(J-MOB-2)*TTL)
+      Z(J)=-(RCUD+THICK/2.)+RCLD*COS(TETAl+(J-MOB-2)*TTL)
 1     CONTINUE
-	R(MCL+2)=RCLD*SIN(TETACU)
-	Z(MCL+2)=-(RCUD+THICK/2.)+RCLD*COS(TETACU)
+      R(MCL+2)=RCLD*SIN(TETACU)
+      Z(MCL+2)=-(RCUD+THICK/2.)+RCLD*COS(TETACU)
       DO  7  J=MOB+1,MCL
       RR(J)=(R(J+1)+R(J+2))/2.
       ZZ(J)=(Z(J+1)+Z(J+2))/2.
@@ -3449,20 +3288,20 @@ c 	Z(MOB+2)=-(RCUD+THICK/2.)+RCLD*COS(TETAC)
       RETURN
       END
 C*******************SALEKI**********************************************
-	SUBROUTINE DEFINE40 (R,Z,RR,ZZ,RM,MCL,MHL,RCLD,RCUD,TETACU,
-	&THICK,HH)
-	IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      SUBROUTINE DEFINE40 (R,Z,RR,ZZ,RM,MCL,MHL,RCLD,RCUD,TETACU,
+     &THICK,HH)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA)
-	R(MCL+2)=RCLD*SIN(TETACU)
-	Z(MCL+2)=-(RCUD+THICK/2.)+RCLD*COS(TETACU)
-	DELTAH=HH/(MHL-MCL)
-	DO  1  J=MCL+3,MHL+2
+      R(MCL+2)=RCLD*SIN(TETACU)
+      Z(MCL+2)=-(RCUD+THICK/2.)+RCLD*COS(TETACU)
+      DELTAH=HH/(MHL-MCL)
+      DO  1  J=MCL+3,MHL+2
       R(J)=R(J-1)+DELTAH*sin(TETACU)
-	Z(J)=Z(J-1)-DELTAH*cos(TETACU)
+      Z(J)=Z(J-1)-DELTAH*cos(TETACU)
  1    CONTINUE
-	R(MHL+2)=R(MCL+2)+HH*SIN(TETACU)
-	Z(MHL+2)=Z(MCL+2)-HH*COS(TETACU)
+      R(MHL+2)=R(MCL+2)+HH*SIN(TETACU)
+      Z(MHL+2)=Z(MCL+2)-HH*COS(TETACU)
       DO  7  J=MCL+1,MHL
       RR(J)=(R(J+1)+R(J+2))/2.
       ZZ(J)=(Z(J+1)+Z(J+2))/2.
@@ -3472,18 +3311,18 @@ C*******************SALEKI**********************************************
 C***********************************************************************
       SUBROUTINE DEFINE30 (R,Z,RR,ZZ,RM,DIAM,MHL,MVL,N,RMD,RCUD)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),ALF(NPA)
 C      RMD=RM/RM
-	Z(MHL+2)=-RCUD
-	DELTAZ=(N*RMD)/(MVL-MHL)
+      Z(MHL+2)=-RCUD
+      DELTAZ=(N*RMD)/(MVL-MHL)
       DO  1  J=MHL+3,MVL+2
       Z(J)=Z(J-1)-DELTAZ
  1    CONTINUE
       DO  2  J=MHL+2,MVL+2
       R(J)=DIAM/(2.*RM)
  2    CONTINUE
-	  Z(MVL+2)=-RCUD-N*RM
+      Z(MVL+2)=-RCUD-N*RM
       DO  7  J=MHL+1,MVL
       RR(J)=(R(J+1)+R(J+2))/2.
       ZZ(J)=(Z(J+1)+Z(J+2))/2.
@@ -3493,14 +3332,14 @@ C      RMD=RM/RM
 C***********************************************************************
       SUBROUTINE DEFINE300 (R,Z,RR,ZZ,RM,MCU,MHU,N,RMD,RCUD,TETACU)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),ALF(NPA)
-	Z(MCU+2)=-RCUD+RCUD*COS(TETACU)
-	R(MCU+2)=RCUD*SIN(TETACU)
-	DELTAH=(N*RMD)/(MHU-MCU)
+      Z(MCU+2)=-RCUD+RCUD*COS(TETACU)
+      R(MCU+2)=RCUD*SIN(TETACU)
+      DELTAH=(N*RMD)/(MHU-MCU)
       DO  1  J=MCU+3,MHU+2
       Z(J)=Z(J-1)-DELTAH*SIN(TETACU)
-	R(J)=R(J-1)+DELTAH*COS(TETACU)
+      R(J)=R(J-1)+DELTAH*COS(TETACU)
  1    CONTINUE
       DO  7  J=MCU+1,MHU
       RR(J)=(R(J+1)+R(J+2))/2.
@@ -3509,11 +3348,11 @@ C***********************************************************************
       RETURN
       END
 
-	
+      
 
       SUBROUTINE DEFINE3 (R,Z,RM,M,MN)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA)
       RMD=RM/RM
       DO  1  J=M+2,MN+2
@@ -3542,7 +3381,7 @@ C***********************************************************************
 C***********************************************************************
       SUBROUTINE SOLVER(A,XY,NN)  
       IMPLICIT REAL*8(A-H,O-Z)
-	PARAMETER (NPA=600)
+      PARAMETER (NPA=600)
 C      COMMON/ONE/NN,NE,L,X(NPA),Y(NPA),U(NPA),D(NPA),LE(NPA),TU,TQ
 C     1,CON(200,2),KODE(NPA),Q(NPA),POEI(2,50),FDEP(2,50),ALPHA(NPA),NI
 C      COMMON/FIVE/XY(NPA),A(200,200)
@@ -3556,195 +3395,603 @@ C TRIANGULARIZE NONSYMMETRIC FULL MATRIX
 C
       DO 1 M=1,NN-1
       AM=1.0/A(M,M)
-	DO 21 J=M+1,NN
-	CD=A(M,J)
+      DO 21 J=M+1,NN
+      CD=A(M,J)
  21     A(M,J)=CD*AM
-	DO 2 N=M+1,NN
-	ALM=A(N,M)
-	   DO 3 KK=M+1,NN 
+      DO 2 N=M+1,NN
+      ALM=A(N,M)
+      DO 3 KK=M+1,NN 
  3         A(N,KK)=A(N,KK)-A(M,KK)*ALM
  2      CONTINUE
  1    CONTINUE
 C
 C BACK SUBSTITUTION
 C
-	 DO 10 M=1,NN-1
-	 AM=1.0/A(M,M)
-	 XY(M)=XY(M)*AM
-	    DO 20 N=M+1,NN
-	    ALM=A(N,M)
-	    XY(N)=XY(N)-XY(M)*ALM
+      DO 10 M=1,NN-1
+      AM=1.0/A(M,M)
+      XY(M)=XY(M)*AM
+      DO 20 N=M+1,NN
+      ALM=A(N,M)
+      XY(N)=XY(N)-XY(M)*ALM
  20         CONTINUE
  10      CONTINUE
       XY(NN)=XY(NN)/A(NN,NN)
       MI=NN
  300  MI=MI-1
       IF(MI.NE.0) THEN
-	 DO 6 J=MI+1,NN
-	 XY(MI)=XY(MI)-A(MI,J)*XY(J)
+      DO 6 J=MI+1,NN
+      XY(MI)=XY(MI)-A(MI,J)*XY(J)
  6       CONTINUE
       GOTO 300
       END IF
       RETURN
       END
 C***********************************************************************
-	SUBROUTINE COP1 (R,Z,RNIM,ZNIM,M,MHU,MCU,MOB,MCL,MHL,RM,FIP,KK
+C=======================================================================
+C     EXTERIOR LIQUID FLOW-FIELD POST-PROCESSING
+C=======================================================================
+      SUBROUTINE BUILD_WALL_FLOW_GRID(RFIELD,ZFIELD,NFR,NFZ,
+     &RMIN,RMAX,ZMIN,ZMAX,DRFIELD,DZFIELD)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION RFIELD(NFR),ZFIELD(NFZ)
+      DRFIELD=(RMAX-RMIN)/(NFR-1)
+      DZFIELD=(ZMAX-ZMIN)/(NFZ-1)
+      DO 1 I=1,NFR
+      RFIELD(I)=RMIN+(I-1)*DRFIELD
+ 1    CONTINUE
+      DO 2 J=1,NFZ
+      ZFIELD(J)=ZMIN+(J-1)*DZFIELD
+ 2    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE BUILD_FLOW_MASK(R,Z,M,RFIELD,ZFIELD,NFR,NFZ,
+     &RMIN,RMAX,ZMIN,ZMAX,CLEARANCE,FIELD_MASK)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),RFIELD(NFR),ZFIELD(NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ)
+      LOGICAL POINT_IN_BUBBLE
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      RP=RFIELD(I)
+      ZP=ZFIELD(J)
+      FIELD_MASK(I,J)=1
+C     The grid itself lies in the requested window, but retain explicit
+C     bounds tests so this routine remains safe if nonuniform grids replace it.
+      IF (RP.LT.RMIN.OR.RP.GT.RMAX.OR.ZP.LT.ZMIN.OR.ZP.GT.ZMAX)
+     &FIELD_MASK(I,J)=0
+C     Exclude the wall and a clearance band above it.  This also ensures
+C     that no finite-difference stencil is forced through z=0.
+      IF (ZP.LE.ZMIN+CLEARANCE) FIELD_MASK(I,J)=0
+      IF (FIELD_MASK(I,J).EQ.1) THEN
+      IF (POINT_IN_BUBBLE(RP,ZP,R,Z,M)) FIELD_MASK(I,J)=0
+      ENDIF
+      IF (FIELD_MASK(I,J).EQ.1) THEN
+      IF (BUBBLE_DISTANCE(RP,ZP,R,Z,M).LE.CLEARANCE)
+     &FIELD_MASK(I,J)=0
+      ENDIF
+ 1    CONTINUE
+ 2    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      LOGICAL FUNCTION POINT_IN_BUBBLE(RP,ZP,R,Z,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA)
+C     Ray crossing is applied to R(1:M+1),Z(1:M+1).  The implicit closing
+C     edge from the lower pole back to the upper pole lies on r=0, thereby
+C     closing the deforming meridional bubble polygon on the symmetry axis.
+      POINT_IN_BUBBLE=.FALSE.
+      JP=M+1
+      DO 1 I=1,M+1
+      IF ((Z(I).GT.ZP).NEQV.(Z(JP).GT.ZP)) THEN
+      RCROSS=R(I)+(ZP-Z(I))*(R(JP)-R(I))/(Z(JP)-Z(I))
+      IF (RP.LT.RCROSS) POINT_IN_BUBBLE=.NOT.POINT_IN_BUBBLE
+      ENDIF
+      JP=I
+ 1    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      DOUBLE PRECISION FUNCTION BUBBLE_DISTANCE(RP,ZP,R,Z,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA)
+      D2MIN=1.0D60
+      DO 1 I=1,M
+      CALL POINT_SEGMENT_DISTANCE2(RP,ZP,R(I),Z(I),R(I+1),Z(I+1),D2)
+      D2MIN=DMIN1(D2MIN,D2)
+ 1    CONTINUE
+C     Include the r=0 closing edge between the two bubble poles.
+      CALL POINT_SEGMENT_DISTANCE2(RP,ZP,R(M+1),Z(M+1),R(1),Z(1),D2)
+      D2MIN=DMIN1(D2MIN,D2)
+      BUBBLE_DISTANCE=DSQRT(D2MIN)
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE POINT_SEGMENT_DISTANCE2(RP,ZP,R1,Z1,R2,Z2,D2)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DR=R2-R1
+      DZ=Z2-Z1
+      DEN=DR*DR+DZ*DZ
+      IF (DEN.LE.1.0D-30) THEN
+      TSEG=0.0D0
+      ELSE
+      TSEG=((RP-R1)*DR+(ZP-Z1)*DZ)/DEN
+      TSEG=DMAX1(0.0D0,DMIN1(1.0D0,TSEG))
+      ENDIF
+      RQ=R1+TSEG*DR
+      ZQ=Z1+TSEG*DZ
+      D2=(RP-RQ)**2+(ZP-ZQ)**2
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE EVALUATE_FLOW_POTENTIAL(DL,R,Z,FID,PSI,FIDWALL,
+     &PSICS,M,MHL,RFIELD,ZFIELD,NFR,NFZ,FIELD_MASK,PHIFIELD,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX,FIELD_INVALID)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),R(NPA),Z(NPA),FID(NPA),PSI(NPA)
+      DIMENSION FIDWALL(NPA),PSICS(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AAAA(24),XXXX(24),RFIELD(NFR),ZFIELD(NFZ)
+      DIMENSION PHIFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ)
+      PI=3.14159265358979323846D0
+      DO 3 IZ=1,NFZ
+      DO 2 IR=1,NFR
+      PHIFIELD(IR,IZ)=FIELD_INVALID
+      IF (FIELD_MASK(IR,IZ).EQ.1) THEN
+      SUMPHI=0.0D0
+      DO 1 JB=1,M
+      CALL FLOW_BUBBLE_KERNEL(DL,JB,RFIELD(IR),ZFIELD(IZ),
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX,GKERNEL,HKERNEL)
+      SUMPHI=SUMPHI+GKERNEL*PSI(JB)-HKERNEL*FID(JB)
+ 1    CONTINUE
+      DO 4 JW=M+1,MHL
+      CALL FLOW_WALL_KERNEL(R,Z,JW,RFIELD(IR),ZFIELD(IZ),
+     &AAAA,XXXX,GKERNEL,HKERNEL)
+      SUMPHI=SUMPHI+GKERNEL*PSICS(JW)-HKERNEL*FIDWALL(JW)
+ 4    CONTINUE
+C     This is the same convention used by the former DAWOODIAN_FFD:
+C       phi=(integral G*q - integral phi*dG/dn)/(4*pi).
+      PHIFIELD(IR,IZ)=SUMPHI/(4.0D0*PI)
+      ENDIF
+ 2    CONTINUE
+ 3    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE FLOW_BUBBLE_KERNEL(DL,J,RF,ZF,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,AAAA,XXXX,GKERNEL,HKERNEL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AAAA(24),XXXX(24)
+      AA=DL(J)
+      BB=DL(J+1)
+      SUMG=0.0D0
+      SUMH=0.0D0
+      DO 1 L=1,10
+      S=(XXXX(L)*(BB-AA)+BB+AA)/2.0D0
+      DS=S-DL(J)
+      RS=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZS=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      DRDS=BR(J)+2.0D0*CR(J)*DS+3.0D0*DR(J)*DS**2
+      DZDS=BZ(J)+2.0D0*CZ(J)*DS+3.0D0*DZ(J)*DS**2
+      CALL FLOW_RING_KERNEL(RS,ZS,DRDS,DZDS,RF,ZF,FG,FH)
+      SUMG=SUMG+FG*AAAA(L)
+      SUMH=SUMH+FH*AAAA(L)
+ 1    CONTINUE
+      GKERNEL=(BB-AA)*SUMG/2.0D0
+      HKERNEL=(BB-AA)*SUMH/2.0D0
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE FLOW_WALL_KERNEL(R,Z,J,RF,ZF,AAAA,XXXX,
+     &GKERNEL,HKERNEL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),AAAA(24),XXXX(24)
+      SUMG=0.0D0
+      SUMH=0.0D0
+      DRDS=R(J+2)-R(J+1)
+      DZDS=Z(J+2)-Z(J+1)
+      DO 1 L=1,10
+      S=(XXXX(L)+1.0D0)/2.0D0
+      RS=R(J+1)+DRDS*S
+      ZS=Z(J+1)+DZDS*S
+      CALL FLOW_RING_KERNEL(RS,ZS,DRDS,DZDS,RF,ZF,FG,FH)
+      SUMG=SUMG+FG*AAAA(L)
+      SUMH=SUMH+FH*AAAA(L)
+ 1    CONTINUE
+      GKERNEL=SUMG/2.0D0
+      HKERNEL=SUMH/2.0D0
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE FLOW_RING_KERNEL(RS,ZS,DRDS,DZDS,RF,ZF,FG,FH)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DOUBLE PRECISION KPAR,LOGETA
+      COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
+     *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
+C     Axisymmetric ring kernels after analytic azimuthal integration.
+C     The polynomial/log expressions approximate complete elliptic
+C     integrals exactly as in the active BEM kernels GAUSS/GAUSSCOM.
+      IF (RS.LE.1.0D-14) THEN
+      FG=0.0D0
+      FH=0.0D0
+      RETURN
+      ENDIF
+      DEN=(RS+RF)**2+(ZS-ZF)**2
+      AX=DSQRT(DEN)
+      BX=DSQRT(DRDS**2+DZDS**2)
+      KPAR=4.0D0*RS*RF/DEN
+      KPAR=DMAX1(0.0D0,DMIN1(1.0D0,KPAR))
+      ETA=DMAX1(1.0D-14,1.0D0-KPAR)
+      LOGETA=DLOG(ETA)
+      PET=A0+ETA*(A1+ETA*(A2+ETA*(A3+A4*ETA)))
+      QET=B0+ETA*(B1+ETA*(B2+ETA*(B3+B4*ETA)))
+      RET=1.0D0+ETA*(C1+ETA*(C2+ETA*(C3+C4*ETA)))
+      SET=ETA*(D1+ETA*(D2+ETA*(D3+D4*ETA)))
+C     DZDS*RF/KPAR is evaluated in its finite limiting form so r=0
+C     never creates a 0/0 operation.
+      DX=DZDS*DEN/(4.0D0*RS)
+      CX=DZDS*(RS+RF)-DRDS*(ZS-ZF)-2.0D0*DX
+      FG=4.0D0*RS*BX*(PET-QET*LOGETA)/AX
+      FH=-4.0D0*RS*(CX*(RET-SET*LOGETA)/ETA+
+     &2.0D0*DX*(PET-QET*LOGETA))/(AX**3)
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE CALCULATE_FLOW_VELOCITY(PHIFIELD,RFIELD,ZFIELD,
+     &NFR,NFZ,FIELD_MASK,URFIELD,UZFIELD,UMAGFIELD,FIELD_INVALID)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION PHIFIELD(NFR,NFZ),RFIELD(NFR),ZFIELD(NFZ)
+      DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
+      DIMENSION UMAGFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ),WORK_MASK(NFR,NFZ)
+      INTEGER VALIDR,VALIDZ,IM1,IM2,IP1,IP2,JM1,JM2,JP1,JP2
+      DRFIELD=RFIELD(2)-RFIELD(1)
+      DZFIELD=ZFIELD(2)-ZFIELD(1)
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      WORK_MASK(I,J)=FIELD_MASK(I,J)
+      URFIELD(I,J)=FIELD_INVALID
+      UZFIELD(I,J)=FIELD_INVALID
+      UMAGFIELD(I,J)=FIELD_INVALID
+ 1    CONTINUE
+ 2    CONTINUE
+      DO 4 J=1,NFZ
+      DO 3 I=1,NFR
+      IF (WORK_MASK(I,J).EQ.1) THEN
+      VALIDR=0
+      VALIDZ=0
+      IM1=I-1
+      IM2=I-2
+      IP1=I+1
+      IP2=I+2
+      JM1=J-1
+      JM2=J-2
+      JP1=J+1
+      JP2=J+2
+C     Symmetry supplies the radial derivative on r=0 exactly.
+      IF (I.EQ.1) THEN
+      URFIELD(I,J)=0.0D0
+      VALIDR=1
+      ELSE
+C     Fortran does not require short-circuit evaluation.  Bounds and mask
+C     tests are deliberately nested so no I=0 or I=NFR+1 expression exists.
+      IF (I.GT.1.AND.I.LT.NFR) THEN
+      IF (WORK_MASK(IM1,J).EQ.1.AND.WORK_MASK(IP1,J).EQ.1) THEN
+      URFIELD(I,J)=(PHIFIELD(IP1,J)-PHIFIELD(IM1,J))/
+     &(2.0D0*DRFIELD)
+      VALIDR=1
+      ENDIF
+      ENDIF
+      IF (VALIDR.EQ.0.AND.IP2.LE.NFR) THEN
+      IF (WORK_MASK(IP1,J).EQ.1.AND.WORK_MASK(IP2,J).EQ.1) THEN
+      URFIELD(I,J)=(-3.0D0*PHIFIELD(I,J)+4.0D0*PHIFIELD(IP1,J)
+     &-PHIFIELD(IP2,J))/(2.0D0*DRFIELD)
+      VALIDR=1
+      ENDIF
+      ENDIF
+      IF (VALIDR.EQ.0.AND.IM2.GE.1) THEN
+      IF (WORK_MASK(IM1,J).EQ.1.AND.WORK_MASK(IM2,J).EQ.1) THEN
+      URFIELD(I,J)=(3.0D0*PHIFIELD(I,J)-4.0D0*PHIFIELD(IM1,J)
+     &+PHIFIELD(IM2,J))/(2.0D0*DRFIELD)
+      VALIDR=1
+      ENDIF
+      ENDIF
+      ENDIF
+C     The same nested structure prevents J=0 or J=NFZ+1 evaluation.
+      IF (J.GT.1.AND.J.LT.NFZ) THEN
+      IF (WORK_MASK(I,JM1).EQ.1.AND.WORK_MASK(I,JP1).EQ.1) THEN
+      UZFIELD(I,J)=(PHIFIELD(I,JP1)-PHIFIELD(I,JM1))/
+     &(2.0D0*DZFIELD)
+      VALIDZ=1
+      ENDIF
+      ENDIF
+      IF (VALIDZ.EQ.0.AND.JP2.LE.NFZ) THEN
+      IF (WORK_MASK(I,JP1).EQ.1.AND.WORK_MASK(I,JP2).EQ.1) THEN
+      UZFIELD(I,J)=(-3.0D0*PHIFIELD(I,J)+4.0D0*PHIFIELD(I,JP1)
+     &-PHIFIELD(I,JP2))/(2.0D0*DZFIELD)
+      VALIDZ=1
+      ENDIF
+      ENDIF
+      IF (VALIDZ.EQ.0.AND.JM2.GE.1) THEN
+      IF (WORK_MASK(I,JM1).EQ.1.AND.WORK_MASK(I,JM2).EQ.1) THEN
+      UZFIELD(I,J)=(3.0D0*PHIFIELD(I,J)-4.0D0*PHIFIELD(I,JM1)
+     &+PHIFIELD(I,JM2))/(2.0D0*DZFIELD)
+      VALIDZ=1
+      ENDIF
+      ENDIF
+      IF (VALIDR.EQ.1.AND.VALIDZ.EQ.1) THEN
+      UMAGFIELD(I,J)=DSQRT(URFIELD(I,J)**2+UZFIELD(I,J)**2)
+      ELSE
+C     No derivative is ever taken through the bubble or wall.  If a
+C     second-order one-sided stencil is unavailable, invalidate the point.
+      FIELD_MASK(I,J)=0
+      URFIELD(I,J)=FIELD_INVALID
+      UZFIELD(I,J)=FIELD_INVALID
+      UMAGFIELD(I,J)=FIELD_INVALID
+      ENDIF
+      ENDIF
+ 3    CONTINUE
+ 4    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE CALCULATE_FLOW_PRESSURE(PHIFIELD,PHIPREV,URFIELD,
+     &UZFIELD,FIELD_MASK,FIELD_MASK_PREV,NFR,NFZ,TIMECURRENT,
+     &TIMEPREV,HAVE_PREV,PC,P1INF,PSTARFIELD,PPAFIELD,
+     &PRESSURE_READY,FIELD_INVALID)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION PHIFIELD(NFR,NFZ),PHIPREV(NFR,NFZ)
+      DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
+      DIMENSION PSTARFIELD(NFR,NFZ),PPAFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ),FIELD_MASK_PREV(NFR,NFZ)
+      LOGICAL HAVE_PREV,PRESSURE_READY
+      PRESSURE_READY=.FALSE.
+      DELTAT=TIMECURRENT-TIMEPREV
+      IF (HAVE_PREV.AND.DELTAT.GT.0.0D0) PRESSURE_READY=.TRUE.
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      PSTARFIELD(I,J)=FIELD_INVALID
+      PPAFIELD(I,J)=FIELD_INVALID
+      IF (PRESSURE_READY.AND.FIELD_MASK(I,J).EQ.1.AND.
+     &FIELD_MASK_PREV(I,J).EQ.1) THEN
+      DPHIDT_EULER=(PHIFIELD(I,J)-PHIPREV(I,J))/DELTAT
+      USQUARED=URFIELD(I,J)**2+UZFIELD(I,J)**2
+C     Dawoodian et al. Eq. (9) uses the material derivative:
+C       p* = 1 - d(phi*)/dt* + 0.5*|u*|**2  (gravity omitted).
+C     The stored grid is Eulerian, so d(phi)/dt = partial(phi)/partial(t)
+C     + u.grad(phi) = partial(phi)/partial(t) + |u|**2.  Therefore this is
+C     equivalently p* = 1 - partial(phi)/partial(t) - 0.5*|u|**2.
+      DPHIDT=DPHIDT_EULER+USQUARED
+      PSTARFIELD(I,J)=1.0D0-DPHIDT+0.5D0*USQUARED
+      PPAFIELD(I,J)=PC+PSTARFIELD(I,J)*(P1INF-PC)
+      ENDIF
+ 1    CONTINUE
+ 2    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE STORE_FLOW_SNAPSHOT(PHIFIELD,FIELD_MASK,NFR,NFZ,
+     &PHIPREV,FIELD_MASK_PREV)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION PHIFIELD(NFR,NFZ),PHIPREV(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ),FIELD_MASK_PREV(NFR,NFZ)
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      PHIPREV(I,J)=PHIFIELD(I,J)
+      FIELD_MASK_PREV(I,J)=FIELD_MASK(I,J)
+ 1    CONTINUE
+ 2    CONTINUE
+      RETURN
+      END
+C***********************************************************************
+      SUBROUTINE WRITE_WALL_FLOW_ZONE(IUNIT,K,TIME,RFIELD,ZFIELD,
+     &NFR,NFZ,PHIFIELD,URFIELD,UZFIELD,UMAGFIELD,PSTARFIELD,
+     &PPAFIELD,FIELD_MASK,PRESSURE_READY,FIELD_INVALID)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION RFIELD(NFR),ZFIELD(NFZ),PHIFIELD(NFR,NFZ)
+      DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
+      DIMENSION UMAGFIELD(NFR,NFZ),PSTARFIELD(NFR,NFZ)
+      DIMENSION PPAFIELD(NFR,NFZ)
+      INTEGER FIELD_MASK(NFR,NFZ)
+      LOGICAL PRESSURE_READY
+      WRITE(IUNIT,100)K,TIME,NFR,NFZ,TIME
+ 100  FORMAT('ZONE T="K=',I6,' T=',ES16.8E3,'", I=',I5,
+     &', J=',I5,', F=POINT, SOLUTIONTIME=',ES16.8E3)
+      IF (PRESSURE_READY) THEN
+      WRITE(IUNIT,*)'AUXDATA PRESSURE_AVAILABLE="YES"'
+      ELSE
+      WRITE(IUNIT,*)'AUXDATA PRESSURE_AVAILABLE="NO"'
+      ENDIF
+      DO 2 J=1,NFZ
+      DO 1 I=1,NFR
+      IF (FIELD_MASK(I,J).EQ.1) THEN
+      WRITE(IUNIT,101)RFIELD(I),ZFIELD(J),PHIFIELD(I,J),
+     &URFIELD(I,J),UZFIELD(I,J),UMAGFIELD(I,J),PSTARFIELD(I,J),
+     &PPAFIELD(I,J),FIELD_MASK(I,J)
+      ELSE
+      WRITE(IUNIT,101)RFIELD(I),ZFIELD(J),FIELD_INVALID,
+     &FIELD_INVALID,FIELD_INVALID,FIELD_INVALID,FIELD_INVALID,
+     &FIELD_INVALID,FIELD_MASK(I,J)
+      ENDIF
+ 1    CONTINUE
+ 2    CONTINUE
+ 101  FORMAT(8(1X,ES24.15E3),1X,I1)
+      RETURN
+      END
+C***********************************************************************
+C     LEGACY/UNUSED DAWOODIAN FLOW-FIELD ROUTINES BELOW
+C     COP1, DAWOODIAN_FFD, GAUSSDW, AND GACOMDW describe the former bilge
+C     geometry.  They are retained only as historical reference and are
+C     not called by the flat-wall solver or the new post-processing path.
+C***********************************************************************
+      SUBROUTINE COP1 (R,Z,RNIM,ZNIM,M,MHU,MCU,MOB,MCL,MHL,RM,FIP,KK
      & ,XYB,ZA,DWFI,DWFJ,DWDI,DWDJ,RCUD,RCLD,THICK)
 
-	IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-	DIMENSION R(200),Z(200),RNIM(9999999),ZNIM(999999),FIP(5,999999)
-	DIMENSION XYB(2,61),ZA(3,60)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION R(200),Z(200),RNIM(9999999),ZNIM(999999),FIP(5,999999)
+      DIMENSION XYB(2,61),ZA(3,60)
 
 
       L=0;H=0;
 
-	N=M+1
-	DO J=N,1,-1
-	XYB(1,J)=R(N-J+1)*RM
-	XYB(2,J)=Z(N-J+1)*RM
-	END DO
+      N=M+1
+      DO J=N,1,-1
+      XYB(1,J)=R(N-J+1)*RM
+      XYB(2,J)=Z(N-J+1)*RM
+      END DO
 
 
       DO I=1,N-1
-	IF (XYB(1,I)/=XYB(1,I+1)) THEN
-	XYZ1=XYB(2,I+1)-XYB(2,I)
-	XYZ2=XYB(1,I+1)-XYB(1,I)
-	ZA(1,I)=XYZ1/XYZ2
-	ZA(2,I)=(-XYZ1/XYZ2)*XYB(1,I)+XYB(2,I)
-	ZA(3,I)=1
-	ELSE IF (XYB(1,I)==XYB(1,I+1))THEN
-	ZA(1,I)=0
-	ZA(2,I)=XYB(1,I)
-	ZA(3,I)=0
-	END IF
+      IF (XYB(1,I)/=XYB(1,I+1)) THEN
+      XYZ1=XYB(2,I+1)-XYB(2,I)
+      XYZ2=XYB(1,I+1)-XYB(1,I)
+      ZA(1,I)=XYZ1/XYZ2
+      ZA(2,I)=(-XYZ1/XYZ2)*XYB(1,I)+XYB(2,I)
+      ZA(3,I)=1
+      ELSE IF (XYB(1,I)==XYB(1,I+1))THEN
+      ZA(1,I)=0
+      ZA(2,I)=XYB(1,I)
+      ZA(3,I)=0
+      END IF
 C	PRINT*,ZA(1,I)
-	END DO
+      END DO
 
-    	KK=0
-	NOP=50											
-	DO I=1,DWFI
-	DO J=1,DWFJ
-	FIP(1,J+DWFJ*(I-1))=0.002*RM+((I-1)*DWDI*RM)
-	FIP(2,J+DWFJ*(I-1))=-3.0*RM+((J-1)*DWDJ*RM)
-	KK=KK+1
-	END DO
-	END DO
-	
+      KK=0
+      NOP=50											
+      DO I=1,DWFI
+      DO J=1,DWFJ
+      FIP(1,J+DWFJ*(I-1))=0.002*RM+((I-1)*DWDI*RM)
+      FIP(2,J+DWFJ*(I-1))=-3.0*RM+((J-1)*DWDJ*RM)
+      KK=KK+1
+      END DO
+      END DO
+      
       DO I=1,KK
-	FIP(3,I)=3 
-	END DO
+      FIP(3,I)=3 
+      END DO
 
-	DO I=1,KK
-J	IF (FIP(2,I)>0) THEN
-	IF ((FIP(2,I)<MINVAL(XYB(2,:))) .OR. (FIP(2,I)>MAXVAL(XYB(2,:)))
-	&.OR.(FIP(1,I)>MAXVAL(XYB(1,:))+0.015*RM)) THEN
+      DO I=1,KK
+C	IF (FIP(2,I)>0) THEN
+      IF ((FIP(2,I)<MINVAL(XYB(2,:))) .OR. (FIP(2,I)>MAXVAL(XYB(2,:)))
+     &.OR.(FIP(1,I)>MAXVAL(XYB(1,:))+0.015*RM)) THEN
       FIP(3,I)=1 
-	FIP(4,I)=0
-J	END IF
-	END IF
-	END DO
+      FIP(4,I)=0
+C	END IF
+      END IF
+      END DO
 
-	DO I=1,KK
-	H=0
-	IF((FIP(2,I)>=MINVAL(XYB(2,:))).AND.(FIP(2,I)<=MAXVAL(XYB(2,:)))
-	&.AND.(FIP(1,I)<=MAXVAL(XYB(1,:))+.015*RM)) THEN
+      DO I=1,KK
+      H=0
+      IF((FIP(2,I)>=MINVAL(XYB(2,:))).AND.(FIP(2,I)<=MAXVAL(XYB(2,:)))
+     &.AND.(FIP(1,I)<=MAXVAL(XYB(1,:))+.015*RM)) THEN
       DO J=1,N-1
-	H=H+1
-	IF ((XYB(1,J)/=0) .OR. (XYB(1,J+1)/=0)) THEN
-	IF ((FIP(2,I)>=XYB(2,J)) .AND. (FIP(2,I)<=XYB(2,J+1))) THEN
-	IF (ZA(3,H)==1) THEN
-	A=FIP(2,I)-ZA(1,H)*FIP(1,I)-ZA(2,H)
-	IF (ZA(1,H)>=0) THEN
-	IF (A<0) THEN
-	FIP(3,I)=1
-	FIP(4,I)=H
-	ELSE IF (A>=0) THEN
-	FIP(3,I)=0    
-	END IF
-	ELSEIF (ZA(1,H)<0)THEN
-	IF (A>0) THEN
-	FIP(3,I)=1
-	FIP(4,I)=H  
-	ELSEIF (A<=0) THEN
-	FIP(3,I)=0
-	END IF
-	END IF
-	ELSEIF (ZA(3,H)==0) THEN 
-	IF (FIP(1,I)>XYB(1,J)) THEN
-	FIP(3,I)=1
-	FIP(4,I)=H
-	ELSEIF (FIP(1,I)<=XYB(1,J)) THEN
-	FIP(3,I)=0
-	END IF
-	END IF
-	END IF
-	END IF
-	END DO
-	END IF
-	END DO
+      H=H+1
+      IF ((XYB(1,J)/=0) .OR. (XYB(1,J+1)/=0)) THEN
+      IF ((FIP(2,I)>=XYB(2,J)) .AND. (FIP(2,I)<=XYB(2,J+1))) THEN
+      IF (ZA(3,H)==1) THEN
+      A=FIP(2,I)-ZA(1,H)*FIP(1,I)-ZA(2,H)
+      IF (ZA(1,H)>=0) THEN
+      IF (A<0) THEN
+      FIP(3,I)=1
+      FIP(4,I)=H
+      ELSE IF (A>=0) THEN
+      FIP(3,I)=0    
+      END IF
+      ELSEIF (ZA(1,H)<0)THEN
+      IF (A>0) THEN
+      FIP(3,I)=1
+      FIP(4,I)=H  
+      ELSEIF (A<=0) THEN
+      FIP(3,I)=0
+      END IF
+      END IF
+      ELSEIF (ZA(3,H)==0) THEN 
+      IF (FIP(1,I)>XYB(1,J)) THEN
+      FIP(3,I)=1
+      FIP(4,I)=H
+      ELSEIF (FIP(1,I)<=XYB(1,J)) THEN
+      FIP(3,I)=0
+      END IF
+      END IF
+      END IF
+      END IF
+      END DO
+      END IF
+      END DO
 
 
-	H=0								
-	DO I=1,N-1
-	H=H+1 
-	IF (XYB(2,I)>XYB(2,I+1)) THEN      
-	DO J=1,KK      
-	IF ((FIP(2,J)>=XYB(2,I+1)) .AND. (FIP(2,J)<=XYB(2,I))) THEN      
-	IF (ZA(3,H)==1) THEN      
-	A1=FIP(2,J)-ZA(1,H)*FIP(1,J)-ZA(2,H)
-	IF (FIP(3,J)/=1) THEN      
-	IF (ZA(1,H)>=0) THEN
-	IF (A1>0) THEN      
-	FIP(3,J)=1      
-	FIP(4,J)=H      
- 	ELSEIF (A1<=0) THEN      
- 	FIP(3,J)=0      
-	END IF      
-	ELSEIF (ZA(1,H)<0) THEN      
-	IF (A1<0) THEN      
-	FIP(3,J)=1      
-	FIP(4,J)=H      
-	ELSEIF (A1>=0) THEN      
-	FIP(3,J)=0      
-	END IF      
-	END IF      
-	END IF      
-	END IF 	  
-	END IF      
-	END DO      
-	END IF      
-	END DO
+      H=0								
+      DO I=1,N-1
+      H=H+1 
+      IF (XYB(2,I)>XYB(2,I+1)) THEN      
+      DO J=1,KK      
+      IF ((FIP(2,J)>=XYB(2,I+1)) .AND. (FIP(2,J)<=XYB(2,I))) THEN      
+      IF (ZA(3,H)==1) THEN      
+      A1=FIP(2,J)-ZA(1,H)*FIP(1,J)-ZA(2,H)
+      IF (FIP(3,J)/=1) THEN      
+      IF (ZA(1,H)>=0) THEN
+      IF (A1>0) THEN      
+      FIP(3,J)=1      
+      FIP(4,J)=H      
+      ELSEIF (A1<=0) THEN      
+      FIP(3,J)=0      
+      END IF      
+      ELSEIF (ZA(1,H)<0) THEN      
+      IF (A1<0) THEN      
+      FIP(3,J)=1      
+      FIP(4,J)=H      
+      ELSEIF (A1>=0) THEN      
+      FIP(3,J)=0      
+      END IF      
+      END IF      
+      END IF      
+      END IF 	  
+      END IF      
+      END DO      
+      END IF      
+      END DO
 
-	DO I=1,N-1      
-	IF ((XYB(1,I)==0) .AND. (XYB(1,I+1)==0)) THEN      
-	MIN1=I      
-	MAX1=I+1      
-	DO J=1,KK      
-	IF ((FIP(2,J)>XYB(2,MIN1)) .AND. (FIP(2,J)<XYB(2,MAX1))) THEN      
-	IF (FIP(3,J)/=0) THEN      
-	FIP(3,J)=1      
-	FIP(4,J)=0      
-	END IF      
-	END IF      
-	END DO      
-	END IF
-	END DO
-	
+      DO I=1,N-1      
+      IF ((XYB(1,I)==0) .AND. (XYB(1,I+1)==0)) THEN      
+      MIN1=I      
+      MAX1=I+1      
+      DO J=1,KK      
+      IF ((FIP(2,J)>XYB(2,MIN1)) .AND. (FIP(2,J)<XYB(2,MAX1))) THEN      
+      IF (FIP(3,J)/=0) THEN      
+      FIP(3,J)=1      
+      FIP(4,J)=0      
+      END IF      
+      END IF      
+      END DO      
+      END IF
+      END DO
+      
       DO I=1,KK      
-	IF ((FIP(1,I)==XYB(1,N)).AND.(FIP(2,I)==XYB(2,N)))THEN      
-	FIP(3,I)=0      
-	END IF      
-	END DO
+      IF ((FIP(1,I)==XYB(1,N)).AND.(FIP(2,I)==XYB(2,N)))THEN      
+      FIP(3,I)=0      
+      END IF      
+      END DO
 *****************************************************
       DO I=1,KK
 
 
-	IF ( ((R(MHU+2)*RM)<=FIP(1,I)) .AND.((R(M+2)*RM)>=FIP(1,I)))THEN
-	IF( (((((Z(M+2)-Z(MHU+2))/(R(M+2)-R(MHU+2)))*(FIP(1,I)-
-	&(R(MHU+2)*RM)))+(Z(MHU+2)*RM))<FIP(2,I)))   THEN
+      IF ( ((R(MHU+2)*RM)<=FIP(1,I)) .AND.((R(M+2)*RM)>=FIP(1,I)))THEN
+      IF( (((((Z(M+2)-Z(MHU+2))/(R(M+2)-R(MHU+2)))*(FIP(1,I)-
+     &(R(MHU+2)*RM)))+(Z(MHU+2)*RM))<FIP(2,I)))   THEN
 C	IF (((R(MCL+2)*RM)<=FIP(1,I)) .AND.((R(MHL+2)*RM)>=FIP(1,I))) THEN
-	IF(((((Z(MHL+2)-Z(MCL+2))/(R(MHL+2)-R(MCL+2)))*(FIP(1,I)-
-	&(R(MCL+2)*RM)))+(Z(MCL+2)*RM))>FIP(2,I))THEN
+      IF(((((Z(MHL+2)-Z(MCL+2))/(R(MHL+2)-R(MCL+2)))*(FIP(1,I)-
+     &(R(MCL+2)*RM)))+(Z(MCL+2)*RM))>FIP(2,I))THEN
 
 C     )))+(Z(MHU+2)*RM))<FIP(2,I))
 C	IF(((R(MHU+2)*RM)<=FIP(1,I)) .AND.((R(M+2)*RM)>=FIP(1,I)).AND.
@@ -3754,23 +4001,23 @@ C	&(R(MHU+2)*RM
 C     )))+(Z(MHU+2)*RM))<FIP(2,I))  .AND.
 C	&(((((Z(MHL+2)-Z(MCL+2))/(R(MHL+2)-R(MCL+2)))*(FIP(1,I)-
 C	&(R(MCL+2)*RM)))+(Z(MCL+2)*RM))>FIP(2,I))))THEN
-	FIP(3,I)=0
+      FIP(3,I)=0
 C	END IF 
-	END IF
-	END IF
-	END IF
-	END DO
-	 DO I=1,KK
-	IF(((R(MCU+1)*RM)<=FIP(1,I)).AND.((R(Mcl+1)*RM)>=FIP(1,I)))THEN
+      END IF
+      END IF
+      END IF
+      END DO
+      DO I=1,KK
+      IF(((R(MCU+2)*RM)<=FIP(1,I)).AND.((R(Mcl+2)*RM)>=FIP(1,I)))THEN
 
-	  IF ((((FIP(1,I))**2)+(FIP(2,I)+((rcLd-(thick/2.))*rm))**2)
+      IF ((((FIP(1,I))**2)+(FIP(2,I)+((rcLd-(thick/2.))*rm))**2)
      & <((RM*RCLD)**2)) THEN
 
- 	IF(((R(MOB+1)*RM)<=FIP(1,I)) .AND.((R(Mhu+1)*RM)>=FIP(1,I)).AND.
-	&(FIP(2,I)>(-((rcud+(thick/2.))*rm)))) THEN
+      IF(((R(MOB+2)*RM)<=FIP(1,I)) .AND.((R(Mhu+2)*RM)>=FIP(1,I)).AND.
+     &(FIP(2,I)>(-((rcud+(thick/2.))*rm)))) THEN
       IF ((((FIP(1,I))**2)+(FIP(2,I)+((rcud+(thick/2.))*rm))**2)
      & >((RM*RCuD)**2)) THEN
-	
+      
 c	IF(((R(MCU+2)*RM)<=FIP(1,I)).AND.((R(Mcl+2)*RM)>=FIP(1,I)))THEN
 c	IF((((FIP(1,I)**2)+((FIP(2,I)-(((rcld-(thick/2.))*rm))**2))
 c     &	  >(((RM*RClD)))**2))) THEN
@@ -3778,49 +4025,49 @@ c     &	  >(((RM*RClD)))**2))) THEN
 
 
     
-	FIP(3,I)=0
-	END IF
-	END IF
-	END IF
- 	END IF
-	END DO
-	DO I=1,KK
+      FIP(3,I)=0
+      END IF
+      END IF
+      END IF
+      END IF
+      END DO
+      DO I=1,KK
 C	IF ((FIP(2,I)<((Z(MCU+2))*RM)) .AND.
 C     &(FIP(2,I)>((Z(MOB+2))*RM))) THEN
-	
+      
       IF  (((FIP(1,I)-(R(MOB+2)*RM))**2)+((FIP(2,I)+(ABS((Z(MOB+2)+
-	&Z(MCU+2))/2.)*RM))**2)<(((THICK/2)*RM)**2))THEN
-	 
-	FIP(3,I)=0 
-	
+     &Z(MCU+2))/2.)*RM))**2)<(((THICK/2)*RM)**2))THEN
+      
+      FIP(3,I)=0 
+      
 C	END IF
-	END IF
-	END DO
+      END IF
+      END DO
 
 
 
-	DO I=1,KK
-	IF (FIP(3,I)==3) THEN	  
-	FIP(3,I)=1      
-	END IF      
-	END DO
+      DO I=1,KK
+      IF (FIP(3,I)==3) THEN	  
+      FIP(3,I)=1      
+      END IF      
+      END DO
 
-	DO I=1,KK
-	IF (FIP(3,I)==1) THEN
-	IF (FIP(4,I)/=0) THEN
-	IF (ZA(3,FIP(4,I))/=0) THEN
-	FIP(5,I)=ABS((FIP(2,I)-ZA(1,FIP(4,I))*FIP(1,I)- ZA(2,FIP(4,I)))/
-	&((1+(ZA(1,FIP(4,I)))**2)**0.5))
-	ELSEIF (ZA(3,FIP(4,I))==0) THEN
-	FIP(5,I)=ABS(FIP(1,I)-ZA(2,FIP(4,I)))
-	END IF
+      DO I=1,KK
+      IF (FIP(3,I)==1) THEN
+      IF (FIP(4,I)/=0) THEN
+      IF (ZA(3,FIP(4,I))/=0) THEN
+      FIP(5,I)=ABS((FIP(2,I)-ZA(1,FIP(4,I))*FIP(1,I)- ZA(2,FIP(4,I)))/
+     &((1+(ZA(1,FIP(4,I)))**2)**0.5))
+      ELSEIF (ZA(3,FIP(4,I))==0) THEN
+      FIP(5,I)=ABS(FIP(1,I)-ZA(2,FIP(4,I)))
+      END IF
 !	NIMA
       IF ((FIP(5,I)/RM)<0.0006) THEN
-	FIP(3,I)=0
-	END IF
-	END IF
-	END IF
-	END DO
+      FIP(3,I)=0
+      END IF
+      END IF
+      END IF
+      END DO
 
 !	DO I=1,KK
 !	IF(FIP(2,I)==0.OR.FIP(2,I)==GAP/RM)THEN
@@ -3828,32 +4075,32 @@ C	END IF
 !	END IF
 !	END DO      
 
-	RNIM(1)=0.0
-	ZNIM(1)=0.0
+      RNIM(1)=0.0
+      ZNIM(1)=0.0
 
       DO I=1,KK
 C	IF (FIP(3,I)==1) THEN             
-	RNIM(I)=FIP(1,I)/RM      
-	ZNIM(I)=FIP(2,I)/RM	   
+      RNIM(I)=FIP(1,I)/RM      
+      ZNIM(I)=FIP(2,I)/RM	   
 C	END IF
-    	END DO  
+      END DO  
 
 
      
 
   312 format(f10.5,2x,f10.5,2x,f10.5,2X,F10.5)
-       	
-D
+      
+C
       RETURN      	
-	END
+      END
 
 
       SUBROUTINE DAWOODIAN_FFD (DL,R,Z,ZNIM,RNIM,FID,PSI,FIDCint1,
-	&PSICS,FDDW,M,MN,NK,KK,FIPQ,AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX)
+     &PSICS,FDDW,M,MN,NK,KK,FIPQ,AR,BR,CR,DR,AZ,BZ,CZ,DZ,AAAA,XXXX)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NNPA=600)
-r      COMMON/SPLR/AR,BR,CR,DR
-r      COMMON/SPLZ/AZ,BZ,CZ,DZ
+C      COMMON/SPLR/AR,BR,CR,DR
+C      COMMON/SPLZ/AZ,BZ,CZ,DZ
       DIMENSION DL(NNPA),R(NNPA),Z(NNPA)
       DIMENSION AR(NNPA),BR(NNPA),CR(NNPA),DR(NNPA)
       DIMENSION AZ(NNPA),BZ(NNPA),CZ(NNPA),DZ(NNPA)
@@ -3862,13 +4109,13 @@ r      COMMON/SPLZ/AZ,BZ,CZ,DZ
       DIMENSION FFID(NNPA),FPSIRES(NNPA)
       DIMENSION FDDW(999999),FIPQ(999999),XXXX(10),AAAA(10)
       DO  1  I=1,kk
-	IF (FIPQ(I)==1) THEN
+      IF (FIPQ(I)==1) THEN
       FNNDWU1=0.0
       FNNDWU2=0.0
 
       DO  2  J=1,M
       CALL GAUSSDW (DL,RNIM,ZNIM,ENTDWU1,ENTDWU2,I,J,AR,BR,CR,DR,
-	&AZ,BZ,CZ,DZ,AAAA,XXXX)
+     &AZ,BZ,CZ,DZ,AAAA,XXXX)
       FNDWU1=ENTDWU1
       FNDWU2=ENTDWU2
       FNNDWU1=FNNDWU1+FNDWU1*PSI(J)
@@ -3881,33 +4128,33 @@ r      COMMON/SPLZ/AZ,BZ,CZ,DZ
       FNDWU2=ENTDWU2
       FNNDWU1=FNNDWU1+FNDWU1*PSICS(j)
       FNNDWU2=FNNDWU2+FNDWU2*FIDCINT1(J)
-r      WRITE(*,*) FNNDWU2 
+C      WRITE(*,*) FNNDWU2 
  3    CONTINUE
 
-	FDDW(I)=(FNNDWU1-FNNDWU2)/(4.*3.1415) 
+      FDDW(I)=(FNNDWU1-FNNDWU2)/(4.*3.1415) 
       ELSE IF	(FIPQ(I)/=1) THEN
- 	FDDW(I)=0.0
-	END IF
+      FDDW(I)=0.0
+      END IF
 1	CONTINUE
 
-R      DO  20  I=1,KK
-R      WRITE(*,*) FNNDWU2 
-R20	continue
-		
+C      DO  20  I=1,KK
+C      WRITE(*,*) FNNDWU2 
+C20	continue
+      
       RETURN
       END
 ************************************************************************
 
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE GAUSSDW (DL,RRB,ZRB,ENTRB1,ENTRB2,I,J,AR,BR,CR,DR,
-	&AZ,BZ,CZ,DZ,AAAA,XXXX)
+     &AZ,BZ,CZ,DZ,AAAA,XXXX)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NNPA=600)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
-R      COMMON/GAUSS10/AAAA,XXXX
-r      COMMON/SPLR/AR,BR,CR,DR
-r      COMMON/SPLZ/AZ,BZ,CZ,DZ
+C      COMMON/GAUSS10/AAAA,XXXX
+C      COMMON/SPLR/AR,BR,CR,DR
+C      COMMON/SPLZ/AZ,BZ,CZ,DZ
       DIMENSION RRB(NNPA),ZRB(NNPA),
      *          RX(NNPA),ZX(NNPA)
       DIMENSION XXXX(10),AAAA(10)
@@ -3961,11 +4208,11 @@ C     DX11=???
  300  CONTINUE
       ENTRB1=((BB-AA)/2.)*SUM1
       ENTRB2=((BB-AA)/2.)*SUM2
-j     WRITE(*,400)ENT1,ENT2,ENT3,ENT4
+C     WRITE(*,400)ENT1,ENT2,ENT3,ENT4
 
-R      DO  20  J=1,M
-r      WRITE(*,*) DL(I)
-R20	continue
+C      DO  20  J=1,M
+C      WRITE(*,*) DL(I)
+C20	continue
 
  400  FORMAT(1X,4F30.15)
       RETURN
@@ -4032,13 +4279,11 @@ C     *ZRB(I))-2.*DX11)
       ENTRB2=((BB-AA)/2.)*SUM2
 C     WRITE(*,400)ENT1,ENT2,ENT3,ENT4
 
-R      DO  20  J=1,M
-R      WRITE(*,*) SUM1 
-R20	continue
+C      DO  20  J=1,M
+C      WRITE(*,*) SUM1 
+C20	continue
 
 
  400  FORMAT(1X,4F30.15)
       RETURN
       END
-
-
