@@ -112,6 +112,12 @@ C=======================================================================
       DIMENSION QRECOMP_COMP(MAXCOMP),QCLOSURE_COMP(MAXCOMP)
       DIMENSION QVR_JUMP_COMP(MAXCOMP)
       DIMENSION NRELOC_COMP(MAXVR)
+      INTEGER LIMITER_COMPARE_STAGE
+      DIMENSION AR_LIMIT(NPA),BR_LIMIT(NPA),CR_LIMIT(NPA),DR_LIMIT(NPA)
+      DIMENSION AZ_LIMIT(NPA),BZ_LIMIT(NPA),CZ_LIMIT(NPA),DZ_LIMIT(NPA)
+      DIMENSION U_LIMIT_BASE(NPA),V_LIMIT_BASE(NPA),PSI_LIMIT_BASE(NPA)
+      COMMON/SPLINE_LIMITER_COMPARE/LIMITER_COMPARE_STAGE,AR_LIMIT,
+     &BR_LIMIT,CR_LIMIT,DR_LIMIT,AZ_LIMIT,BZ_LIMIT,CZ_LIMIT,DZ_LIMIT
       DIMENSION RFIELD(NFR),ZFIELD(NFZ)
       DIMENSION PHIFIELD(NFR,NFZ),PHIPREV(NFR,NFZ)
       DIMENSION URFIELD(NFR,NFZ),UZFIELD(NFR,NFZ)
@@ -308,6 +314,7 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       NVR=0
       POST_STEPS=0
       NRELOC=0
+      LIMITER_COMPARE_STAGE=0
       NREDIST=0
       REBOUND_POSITIVE_COUNT=0
       REBOUND_FIRST_POSITIVE_STEP=0
@@ -1199,6 +1206,50 @@ C     a new compatibility copy of dominant node 1 instead of copying node 65.
      &DOM_VELOCITY_RMS_DIFF
       WRITE(*,*)'MAX PSI_REM CHANGE=',DOM_PSI_MAX_DIFF
       DOMINANT_REMOVAL_STAGE=0
+      ENDIF
+C     One-time same-time comparison of the ordinary and locally constrained
+C     geometries.  Stage 1 has just solved the ordinary cubic on identical
+C     nodes and QREM; install the saved Hermite coefficients and repeat the
+C     unchanged BEM solve without advancing time.  Stage 2 records the
+C     pointwise response and then resumes the original time integrator.
+      IF (DOMINANT_ONLY_ACTIVE.AND.LIMITER_COMPARE_STAGE.EQ.1) THEN
+      DO 2780 J=1,M
+      U_LIMIT_BASE(J)=UCP(J)
+      V_LIMIT_BASE(J)=VCP(J)
+      PSI_LIMIT_BASE(J)=PSI(J)
+      AR(J)=AR_LIMIT(J)
+      BR(J)=BR_LIMIT(J)
+      CR(J)=CR_LIMIT(J)
+      DR(J)=DR_LIMIT(J)
+      AZ(J)=AZ_LIMIT(J)
+      BZ(J)=BZ_LIMIT(J)
+      CZ(J)=CZ_LIMIT(J)
+      DZ(J)=DZ_LIMIT(J)
+      DS=DLM(J)-DL(J)
+      RR(J)=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZZ(J)=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+ 2780 CONTINUE
+      LIMITER_COMPARE_STAGE=2
+      GO TO 821
+      ELSEIF (DOMINANT_ONLY_ACTIVE.AND.LIMITER_COMPARE_STAGE.EQ.2) THEN
+      VDIFFMAX=0.0D0
+      VDIFFSUM=0.0D0
+      PSIDIFFMAX=0.0D0
+      DO 2781 J=1,M
+      DU=UCP(J)-U_LIMIT_BASE(J)
+      DV=VCP(J)-V_LIMIT_BASE(J)
+      VDIFF=DSQRT(DU*DU+DV*DV)
+      VDIFFMAX=DMAX1(VDIFFMAX,VDIFF)
+      VDIFFSUM=VDIFFSUM+VDIFF*VDIFF
+      PSIDIFFMAX=DMAX1(PSIDIFFMAX,DABS(PSI(J)-PSI_LIMIT_BASE(J)))
+ 2781 CONTINUE
+      VDIFFRMS=DSQRT(VDIFFSUM/DBLE(M))
+      WRITE(344,*)'# SAME_TIME_BEM_VELOCITY_MAX_RMS_PSI_MAX',
+     &VDIFFMAX,VDIFFRMS,PSIDIFFMAX
+      CALL FLUSH(344)
+      WRITE(*,*)'LOCAL C1 SAME-TIME MAX/RMS VELOCITY CHANGE=',
+     &VDIFFMAX,VDIFFRMS
+      LIMITER_COMPARE_STAGE=3
       ENDIF
   530 FORMAT(1X,'PSI(',I2,')=',F10.5,'PSIS(',I2,')=',F10.5)
       DO  1390  J=1,M
@@ -2509,6 +2560,12 @@ C      ENDIF
 C--SAL--(
       IF (ILS.EQ.2) THEN  
       IF (BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT) THEN
+      IF (DOMINANT_ONLY_ACTIVE.AND.NCOMP.EQ.1) THEN
+      CALL WRITE_COMPONENT_SPLINE_ZONE(300,1,R,Z,UEP,VEP,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,ISTART(1),IEND(1))
+      CALL WRITE_COMPONENT_SPLINE_ZONE(300,-1,R,Z,UEP,VEP,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,ISTART(1),IEND(1))
+      ELSE
       DO 2760 IC=1,NCOMP
       WRITE(300,407)MCOMP(IC)+1
       DO 2761 J=ISTART(IC),IEND(IC)
@@ -2523,6 +2580,7 @@ C--SAL--(
       J=ISTART(IC)
       WRITE(300,5071)-R(J),Z(J),-UEP(J),VEP(J)
  2760 CONTINUE
+      ENDIF
       ELSE
       WRITE(300,407)M+1
       WRITE(300,5071)(R(J),Z(J),UEP(J),VEP(J),
@@ -2574,11 +2632,17 @@ C----SALEKI---((
       VB(M+J+1)=VEP(M-J+1)
  3930 CONTINUE
       IF (ILS.EQ.2) THEN  
-cd      MSH=MSH+1
+      cd      MSH=MSH+1
 cd      MSH1=MSH/8
 cd      MSH2=MSH1*8
 cd      IF(MSH2.EQ.MSH) THEN
       IF (BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT) THEN
+      IF (DOMINANT_ONLY_ACTIVE.AND.NCOMP.EQ.1) THEN
+      CALL WRITE_COMPONENT_SPLINE_ZONE(30,1,R,Z,UEP,VEP,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,ISTART(1),IEND(1))
+      CALL WRITE_COMPONENT_SPLINE_ZONE(30,-1,R,Z,UEP,VEP,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,ISTART(1),IEND(1))
+      ELSE
       DO 2763 IC=1,NCOMP
       WRITE(30,40)MCOMP(IC)+1
       DO 2764 J=ISTART(IC),IEND(IC)
@@ -2593,6 +2657,7 @@ cd      IF(MSH2.EQ.MSH) THEN
       J=ISTART(IC)
       WRITE(30,50)-R(J),Z(J),-UEP(J),VEP(J)
  2763 CONTINUE
+      ENDIF
       ELSE
       WRITE(30,40)2*M+1
       WRITE(30,50)(GSC1(J),GSC2(J),UB(J),VB(J),
@@ -2800,6 +2865,49 @@ CSAL      ENDIF
 Cndstart
       
       STOP
+      END
+C=======================================================================
+C     Sample the exact active spline representation for Tecplot output.
+C     Velocities are linearly interpolated only for display; geometry comes
+C     from the same coefficients used by the BEM and all geometric integrals.
+C=======================================================================
+      SUBROUTINE WRITE_COMPONENT_SPLINE_ZONE(LUN,ISIGN,R,Z,U,V,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,JS,JE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,NSAMP=4)
+      DIMENSION R(NPA),Z(NPA),U(NPA),V(NPA),DL(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      NPTS=(JE-JS+1)*NSAMP+1
+      WRITE(LUN,10)NPTS
+      DO 30 J=JS,JE
+      JN=J+1
+      IF (J.EQ.JE) JN=JS
+      H=DL(J+1)-DL(J)
+      DO 20 L=0,NSAMP-1
+      F=DBLE(L)/DBLE(NSAMP)
+      DS=F*H
+      RP=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZP=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      UP=(1.0D0-F)*U(J)+F*U(JN)
+      VP=(1.0D0-F)*V(J)+F*V(JN)
+      IF (ISIGN.LT.0) THEN
+      RP=-RP
+      UP=-UP
+      ENDIF
+      WRITE(LUN,11)RP,ZP,UP,VP
+   20 CONTINUE
+   30 CONTINUE
+      RP=R(JS)
+      UP=U(JS)
+      IF (ISIGN.LT.0) THEN
+      RP=-RP
+      UP=-UP
+      ENDIF
+      WRITE(LUN,11)RP,Z(JS),UP,V(JS)
+   10 FORMAT('ZONE  I=',I4, 'F=POINT')
+   11 FORMAT(4F10.4)
+      RETURN
       END
 C***********************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
@@ -3469,6 +3577,21 @@ C=======================================================================
       IFAIL=5
       RETURN
       ENDIF
+C     A periodic cubic may bow across a nearby non-neighbour branch even
+C     though the physical node-to-node contour is still simple.  In the
+C     single retained-daughter calculation, replace only such artificial
+C     crossings by a local C1 Hermite patch.  The two offending panels and
+C     their immediate neighbours share the limited endpoint tangents; every
+C     other periodic-cubic coefficient remains exactly as constructed above.
+      IF (NCOMP.EQ.1) THEN
+      CALL LIMIT_ARTIFICIAL_SPLINE_CROSSING(RL,ZL,XL,ARL,BRL,CRL,
+     &DRL,AZL,BZL,CZL,DZL,NC,ILIMIT,JLA,JLB,GCHANGE,IERRL)
+      IF (IERRL.NE.0) THEN
+      WRITE(*,*)'LOCAL C1 LIMITER FAILED IERR,PAIR=',IERRL,JLA,JLB
+      IFAIL=8
+      RETURN
+      ENDIF
+      ENDIF
       DO 60 K=1,NC
       J=JS+K-1
       DL(J)=OFFSET+XL(K)
@@ -3499,6 +3622,300 @@ C=======================================================================
 C     Compatibility copy only.  It is not a physical connector panel.
       R(M+1)=R(1)
       Z(M+1)=Z(1)
+      RETURN
+      END
+
+C=======================================================================
+C     LOCAL C1 GEOMETRY LIMITER FOR ARTIFICIAL PERIODIC-SPLINE CROSSINGS
+C=======================================================================
+      SUBROUTINE LIMIT_ARTIFICIAL_SPLINE_CROSSING(R,Z,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,M,IAPPLIED,JAOUT,JBOUT,MAXCHANGE,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      INTEGER JAOUT,JBOUT,IAPPLIED
+      DOUBLE PRECISION MAXCHANGE,LPREV,LNEXT
+      DIMENSION R(NPA),Z(NPA),DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION ARO(NPA),BRO(NPA),CRO(NPA),DRO(NPA)
+      DIMENSION AZO(NPA),BZO(NPA),CZO(NPA),DZO(NPA)
+      DIMENSION TR(NPA),TZ(NPA),MARK(NPA),NMARK(NPA)
+      INTEGER MARK,NMARK
+      INTEGER LIMITER_COMPARE_STAGE
+      DIMENSION AR_LIMIT(NPA),BR_LIMIT(NPA),CR_LIMIT(NPA),DR_LIMIT(NPA)
+      DIMENSION AZ_LIMIT(NPA),BZ_LIMIT(NPA),CZ_LIMIT(NPA),DZ_LIMIT(NPA)
+      COMMON/SPLINE_LIMITER_COMPARE/LIMITER_COMPARE_STAGE,AR_LIMIT,
+     &BR_LIMIT,CR_LIMIT,DR_LIMIT,AZ_LIMIT,BZ_LIMIT,CZ_LIMIT,DZ_LIMIT
+      SAVE NAPPLY
+      DATA NAPPLY/0/
+      IAPPLIED=0
+      IFAIL=0
+      MAXCHANGE=0.0D0
+      JAOUT=0
+      JBOUT=0
+C     While the one-time ordinary-geometry BEM baseline is pending, repeated
+C     geometry bookkeeping must leave the ordinary coefficients untouched.
+      IF (LIMITER_COMPARE_STAGE.EQ.1) RETURN
+      CALL FIND_MIN_NONNEIGHBOR_SPLINE_DISTANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,DMIN,JA,JB,FA,FB,RA,ZA,RB,ZB,HLOCAL,IINT,M,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      IF (IINT.EQ.0) THEN
+C     Act just before a spline-only crossing when its gap has reached the
+C     existing full-precision capture scale while the node chords remain at
+C     least one decade farther apart.  A closest point at a panel endpoint is
+C     assigned to the incident panel on the approaching branch.
+      IF (DMIN.GT.1.0D-4*HLOCAL) RETURN
+      IF (FA.LT.0.05D0) THEN
+      JA=JA-1
+      IF (JA.LT.1) JA=M
+      ELSEIF (FA.GT.0.95D0) THEN
+      JA=JA+1
+      IF (JA.GT.M) JA=1
+      ENDIF
+      IF (FB.LT.0.05D0) THEN
+      JB=JB-1
+      IF (JB.LT.1) JB=M
+      ELSEIF (FB.GT.0.95D0) THEN
+      JB=JB+1
+      IF (JB.GT.M) JB=1
+      ENDIF
+      ENDIF
+C     Do not alter a genuine crossing or near-contact of the physical chords.
+      CALL LINE_SEGMENT_SEPARATION(R(JA),Z(JA),R(JA+1),Z(JA+1),
+     &R(JB),Z(JB),R(JB+1),Z(JB+1),DLINE,AA,BB,ILINE)
+      IF (ILINE.NE.0) RETURN
+      IF (IINT.EQ.0.AND.DLINE.LE.10.0D0*DMIN) RETURN
+      JAOUT=JA
+      JBOUT=JB
+      DO 10 J=1,M
+      ARO(J)=AR(J)
+      BRO(J)=BR(J)
+      CRO(J)=CR(J)
+      DRO(J)=DR(J)
+      AZO(J)=AZ(J)
+      BZO(J)=BZ(J)
+      CZO(J)=CZ(J)
+      DZO(J)=DZ(J)
+      TR(J)=BR(J)
+      TZ(J)=BZ(J)
+      MARK(J)=0
+      NMARK(J)=0
+   10 CONTINUE
+C     Limit the four shared node tangents to the angle bisectors of their two
+C     incident node chords.  The speed is capped by the smaller adjacent
+C     chord speed and reduced by the half-turn cosine.  This is a local
+C     vector-valued Hermite limiter: it follows the nodal polygon without the
+C     large normal excursions of the unconstrained periodic cubic.
+      NPASS=1
+   15 CONTINUE
+      DO 30 II=1,2
+      JO=JA
+      IF (II.EQ.2) JO=JB
+      JN=JO+1
+      IF (JN.GT.M) JN=1
+      DO 25 KK=1,2
+      KN=JO
+      IF (KK.EQ.2) KN=JN
+      KM=KN-1
+      IF (KM.LT.1) KM=M
+      KP=KN+1
+      IF (KP.GT.M) KP=1
+      HPREV=DL(KM+1)-DL(KM)
+      HNEXT=DL(KN+1)-DL(KN)
+      DRPREV=R(KN)-R(KM)
+      DZPREV=Z(KN)-Z(KM)
+      DRNEXT=R(KN+1)-R(KN)
+      DZNEXT=Z(KN+1)-Z(KN)
+      LPREV=DSQRT(DRPREV**2+DZPREV**2)
+      LNEXT=DSQRT(DRNEXT**2+DZNEXT**2)
+      IF (HPREV.LE.1.0D-14.OR.HNEXT.LE.1.0D-14.OR.
+     &LPREV.LE.1.0D-14.OR.LNEXT.LE.1.0D-14) THEN
+      WRITE(*,*)'C1 LIMITER DEGENERATE NODE=',KN,HPREV,HNEXT,
+     &LPREV,LNEXT
+      IFAIL=2
+      RETURN
+      ENDIF
+      EPR=DRPREV/LPREV
+      EPZ=DZPREV/LPREV
+      ENR=DRNEXT/LNEXT
+      ENZ=DZNEXT/LNEXT
+      BISR=EPR+ENR
+      BISZ=EPZ+ENZ
+      BISN=DSQRT(BISR*BISR+BISZ*BISZ)
+      IF (BISN.LE.1.0D-12) THEN
+      WRITE(*,*)'C1 LIMITER REVERSING NODE=',KN,BISN,EPR,EPZ,ENR,ENZ
+      IFAIL=2
+      RETURN
+      ENDIF
+      DOTP=DMAX1(-1.0D0,DMIN1(1.0D0,EPR*ENR+EPZ*ENZ))
+      TURN=DSQRT(DMAX1(0.0D0,0.5D0*(1.0D0+DOTP)))
+      SPEED=DMIN1(LPREV/HPREV,LNEXT/HNEXT)*TURN
+      TR(KN)=SPEED*BISR/BISN
+      TZ(KN)=SPEED*BISZ/BISN
+      NMARK(KN)=1
+   25 CONTINUE
+      JM=JO-1
+      IF (JM.LT.1) JM=M
+      JP=JO+1
+      IF (JP.GT.M) JP=1
+      MARK(JM)=1
+      MARK(JO)=1
+      MARK(JP)=1
+   30 CONTINUE
+C     Cubic Hermite coefficients on the six-panel local neighbourhood.
+      NTENSION=0
+   35 CONTINUE
+      DO 40 J=1,M
+      IF (MARK(J).EQ.0) GO TO 40
+      JN=J+1
+      IF (JN.GT.M) JN=1
+      H=DL(J+1)-DL(J)
+      DRC=R(J+1)-R(J)
+      DZC=Z(J+1)-Z(J)
+      AR(J)=R(J)
+      BR(J)=TR(J)
+      CR(J)=(3.0D0*DRC/H-2.0D0*TR(J)-TR(JN))/H
+      DR(J)=(-2.0D0*DRC/H+TR(J)+TR(JN))/(H*H)
+      AZ(J)=Z(J)
+      BZ(J)=TZ(J)
+      CZ(J)=(3.0D0*DZC/H-2.0D0*TZ(J)-TZ(JN))/H
+      DZ(J)=(-2.0D0*DZC/H+TZ(J)+TZ(JN))/(H*H)
+   40 CONTINUE
+      CALL FIND_MIN_NONNEIGHBOR_SPLINE_DISTANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,DNEW,JAT,JBT,FAT,FBT,RAT,ZAT,RBT,ZBT,HLNEW,
+     &IINTNEW,M,IERR)
+      IF (IERR.NE.0) THEN
+      WRITE(*,*)'C1 LIMITER VALIDATION FAILED IERR,IINT,PAIR,GAP=',
+     &IERR,IINTNEW,JAT,JBT,DNEW
+      IFAIL=3
+      RETURN
+      ENDIF
+C     If the first patch exposes a second spline-only near approach in the
+C     same local neighbourhood, extend the Hermite patch transactionally.
+C     This is needed at a closest point shared by panels 61/62; it prevents
+C     moving the excess curvature from one incident panel to the other.
+      IEXTEND=0
+      IF (IINTNEW.NE.0.OR.DNEW.LE.1.0D-4*HLNEW) THEN
+      CALL LINE_SEGMENT_SEPARATION(R(JAT),Z(JAT),R(JAT+1),Z(JAT+1),
+     &R(JBT),Z(JBT),R(JBT+1),Z(JBT+1),DLINE2,A2,B2,ILINE2)
+      IF (ILINE2.EQ.0.AND.(IINTNEW.NE.0.OR.
+     &DLINE2.GT.10.0D0*DNEW)) IEXTEND=1
+      ENDIF
+      IF (IEXTEND.NE.0.AND.NPASS.LT.4) THEN
+      JA=JAT
+      JB=JBT
+      NPASS=NPASS+1
+      GO TO 15
+      ENDIF
+C     As a final shape-preserving safeguard, add Hermite tension only to the
+C     already selected local node tangents.  Repeated halving approaches the
+C     unchanged nodal polygon monotonically while retaining nonzero C1
+C     tangents and leaving all coefficients outside the patch untouched.
+      IF (IEXTEND.NE.0.AND.NTENSION.LT.12) THEN
+      DO 37 J=1,M
+      IF (NMARK(J).NE.0) THEN
+      TR(J)=0.5D0*TR(J)
+      TZ(J)=0.5D0*TZ(J)
+      ENDIF
+   37 CONTINUE
+      NTENSION=NTENSION+1
+      GO TO 35
+      ENDIF
+      IF (IINTNEW.NE.0) THEN
+      WRITE(*,*)'C1 LIMITER LEFT A GENUINE INTERSECTION=',JAT,JBT
+      IFAIL=3
+      RETURN
+      ENDIF
+      DO 60 J=1,M
+      IF (MARK(J).EQ.0) GO TO 60
+      H=DL(J+1)-DL(J)
+      DO 50 L=0,100
+      DS=H*DBLE(L)/100.0D0
+      RO=ARO(J)+BRO(J)*DS+CRO(J)*DS**2+DRO(J)*DS**3
+      ZO=AZO(J)+BZO(J)*DS+CZO(J)*DS**2+DZO(J)*DS**3
+      RN=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZN=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      MAXCHANGE=DMAX1(MAXCHANGE,DSQRT((RN-RO)**2+(ZN-ZO)**2))
+   50 CONTINUE
+   60 CONTINUE
+      CALL COEFFICIENT_VOLUME_CENTROID(DL,ARO,BRO,CRO,DRO,AZO,BZO,
+     &CZO,DZO,VOLD,COLD,M)
+      CALL COEFFICIENT_VOLUME_CENTROID(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &VNEW,CNEW,M)
+      NAPPLY=NAPPLY+1
+      IF (NAPPLY.EQ.1) THEN
+      OPEN(UNIT=344,FILE='SPLINE_LIMITER_DIAG.dat',STATUS='REPLACE')
+      WRITE(344,*)'# CALL PANEL_A PANEL_B INTERSECT_BEFORE AFTER',
+     &' MAX_GEOM_CHANGE VOLUME_BEFORE AFTER REL_CHANGE CENTROID_BEFORE',
+     &' AFTER CENTROID_CHANGE MIN_GAP_AFTER'
+      ENDIF
+      WRITE(344,*)NAPPLY,JAOUT,JBOUT,IINT,IINTNEW,MAXCHANGE,VOLD,VNEW,
+     &DABS(VNEW-VOLD)/DABS(VOLD),COLD,CNEW,CNEW-COLD,DNEW
+      CALL FLUSH(344)
+C     For the first application only, return the ordinary coefficients for
+C     one baseline BEM solve and retain the constrained coefficients for the
+C     immediate same-time repeat in the main control path.
+      IF (LIMITER_COMPARE_STAGE.EQ.0) THEN
+      DO 65 J=1,M
+      AR_LIMIT(J)=AR(J)
+      BR_LIMIT(J)=BR(J)
+      CR_LIMIT(J)=CR(J)
+      DR_LIMIT(J)=DR(J)
+      AZ_LIMIT(J)=AZ(J)
+      BZ_LIMIT(J)=BZ(J)
+      CZ_LIMIT(J)=CZ(J)
+      DZ_LIMIT(J)=DZ(J)
+      AR(J)=ARO(J)
+      BR(J)=BRO(J)
+      CR(J)=CRO(J)
+      DR(J)=DRO(J)
+      AZ(J)=AZO(J)
+      BZ(J)=BZO(J)
+      CZ(J)=CZO(J)
+      DZ(J)=DZO(J)
+   65 CONTINUE
+      LIMITER_COMPARE_STAGE=1
+      ENDIF
+      IAPPLIED=1
+      RETURN
+      END
+
+      SUBROUTINE COEFFICIENT_VOLUME_CENTROID(DL,AR,BR,CR,DR,AZ,BZ,CZ,
+     &DZ,VOLUME,CENTROID,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DOUBLE PRECISION MOMENT
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION GX(5),GW(5)
+      DATA GX /-0.9061798459386640D0,-0.5384693101056831D0,0.0D0,
+     &0.5384693101056831D0,0.9061798459386640D0/
+      DATA GW /0.2369268850561891D0,0.4786286704993665D0,
+     &0.5688888888888889D0,0.4786286704993665D0,
+     &0.2369268850561891D0/
+      VOLUME=0.0D0
+      MOMENT=0.0D0
+      AREA=0.0D0
+      DO 20 J=1,M
+      H=0.5D0*(DL(J+1)-DL(J))
+      SM=0.5D0*(DL(J+1)+DL(J))
+      DO 10 L=1,5
+      S=SM+H*GX(L)
+      DS=S-DL(J)
+      RP=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZP=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      RPS=BR(J)+2.0D0*CR(J)*DS+3.0D0*DR(J)*DS**2
+      DV=2.0D0*3.141597D0*RP*ZP*RPS
+      DM=3.141592653589793D0*RP*ZP*ZP*RPS
+      DA=2.0D0*3.141592653589793D0*RP*ZP*RPS
+      VOLUME=VOLUME+H*GW(L)*DV
+      MOMENT=MOMENT+H*GW(L)*DM
+      AREA=AREA+H*GW(L)*DA
+   10 CONTINUE
+   20 CONTINUE
+      CENTROID=MOMENT/AREA
       RETURN
       END
 
@@ -5352,14 +5769,41 @@ C     Endpoint 4 projected onto segment 1--2.
      &DR,AZ,BZ,CZ,DZ,DMIN,JAOUT,JBOUT,FAOUT,FBOUT,RAOUT,ZAOUT,
      &RBOUT,ZBOUT,HLOCAL,IINTERSECT,M,IFAIL)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
-      PARAMETER (NPA=600,NSUB=12)
+      PARAMETER (NPA=600,NSUBMAX=128)
       INTEGER JAOUT,JBOUT,IINTERSECT
       DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
       DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA),ARCL(NPA)
-      DIMENSION RS(NPA,0:NSUB),ZS(NPA,0:NSUB)
+      DIMENSION RS(NPA,0:NSUBMAX),ZS(NPA,0:NSUBMAX)
+      DIMENSION NSUBP(NPA),ERRP(NPA)
+      INTEGER NSUBP
+C     Subdivide each cubic until its second-derivative chord-error bound is
+C     resolved relative to the contour scale.  A close pair of sampled chords
+C     also seeds the exact Newton intersection solve, avoiding the old
+C     discontinuous fixed-12-segment prescreen.
       DO 20 J=1,M
-      DO 10 L=0,NSUB
-      FRAC=DBLE(L)/DBLE(NSUB)
+      NS=4
+    5 ERRMAX=0.0D0
+      DF=1.0D0/DBLE(NS)
+      DO 7 L=0,NS-1
+      F0=DBLE(L)/DBLE(NS)
+      F1=DBLE(L+1)/DBLE(NS)
+      CALL EVALUATE_SPLINE_PANEL(F0,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,R0,Z0,RD0,ZD0,RDD0,ZDD0)
+      CALL EVALUATE_SPLINE_PANEL(F1,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,R1,Z1,RD1,ZD1,RDD1,ZDD1)
+      E0=DSQRT(RDD0*RDD0+ZDD0*ZDD0)
+      E1=DSQRT(RDD1*RDD1+ZDD1*ZDD1)
+      ERRMAX=DMAX1(ERRMAX,0.125D0*DF*DF*DMAX1(E0,E1))
+    7 CONTINUE
+      ADAPT_TOL=1.0D-7*DMAX1(1.0D0,DL(M+1))
+      IF (ERRMAX.GT.ADAPT_TOL.AND.NS.LT.NSUBMAX) THEN
+      NS=MIN0(2*NS,NSUBMAX)
+      GO TO 5
+      ENDIF
+      NSUBP(J)=NS
+      ERRP(J)=ERRMAX
+      DO 10 L=0,NS
+      FRAC=DBLE(L)/DBLE(NS)
       CALL EVALUATE_SPLINE_PANEL(FRAC,J,DL,AR,BR,CR,DR,
      &AZ,BZ,CZ,DZ,RS(J,L),ZS(J,L),RD,ZD,RDD,ZDD)
    10 CONTINUE
@@ -5372,14 +5816,15 @@ C     Endpoint 4 projected onto segment 1--2.
       DO 50 JB=JA+1,M
       IF (JB.EQ.JA+1) GO TO 50
       IF (JA.EQ.1.AND.JB.EQ.M) GO TO 50
-      DO 40 IA=0,NSUB-1
-      DO 30 IB=0,NSUB-1
+      DO 40 IA=0,NSUBP(JA)-1
+      DO 30 IB=0,NSUBP(JB)-1
       CALL LINE_SEGMENT_SEPARATION(RS(JA,IA),ZS(JA,IA),
      &RS(JA,IA+1),ZS(JA,IA+1),RS(JB,IB),ZS(JB,IB),
      &RS(JB,IB+1),ZS(JB,IB+1),DD,AA,BB,ISEG)
-      FA=(DBLE(IA)+AA)/DBLE(NSUB)
-      FB=(DBLE(IB)+BB)/DBLE(NSUB)
-      IF (ISEG.NE.0) THEN
+      FA=(DBLE(IA)+AA)/DBLE(NSUBP(JA))
+      FB=(DBLE(IB)+BB)/DBLE(NSUBP(JB))
+      IF (ISEG.NE.0.OR.
+     &DD.LE.2.0D0*(ERRP(JA)+ERRP(JB))+1.0D-14) THEN
       CALL REFINE_SPLINE_INTERSECTION(JA,JB,FA,FB,DL,AR,BR,CR,DR,
      &AZ,BZ,CZ,DZ,RA,ZA,RB,ZB,IOK)
       IF (IOK.NE.0) THEN
