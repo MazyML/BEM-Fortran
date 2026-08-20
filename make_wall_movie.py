@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the flat-wall BEM Tecplot output as a Motion-JPEG AVI."""
+"""Render the complete pre/post-collapse BEM run as a Motion-JPEG AVI."""
 
 from __future__ import annotations
 
@@ -12,10 +12,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 WIDTH, HEIGHT, FPS = 1280, 720, 24
 PLOT = (92, 88, 1200, 650)
-XLIM, YLIM = (-3.0, 3.0), (-0.25, 2.75)
+YLIM = (-0.25, 2.75)
+_plot_aspect = (PLOT[2] - PLOT[0]) / (PLOT[3] - PLOT[1])
+_xspan = (YLIM[1] - YLIM[0]) * _plot_aspect
+XLIM = (-_xspan / 2, _xspan / 2)
 
 
-def read_frames(path: Path):
+def read_zones(path: Path):
     lines = path.read_text().splitlines()
     zones, index = [], 0
     while index < len(lines):
@@ -29,21 +32,41 @@ def read_frames(path: Path):
             raise ValueError(f"Incomplete zone near line {index + 1}")
         zones.append(points)
         index += count + 1
-    if len(zones) % 2:
-        raise ValueError("Expected one bubble zone and one wall zone per frame")
-    return list(zip(zones[0::2], zones[1::2]))
+    return zones
+
+
+def read_half_frames(path: Path):
+    """Read +r bubble, -r bubble, +r wall, -r wall for each step."""
+    zones = read_zones(path)
+    if len(zones) % 4:
+        raise ValueError("Expected four half-profile zones per accepted step")
+    frames = []
+    for index in range(0, len(zones), 4):
+        positive, negative, wall_positive, wall_negative = zones[index : index + 4]
+        if any(abs(point[1]) > 1e-10 for point in wall_positive + wall_negative):
+            raise ValueError(f"Rigid-wall zone is not at z=0 near zone {index + 3}")
+        frames.append((positive, negative))
+    return frames
 
 
 def read_history(path: Path):
     return [tuple(map(float, row.split()[:2])) for row in path.read_text().splitlines() if len(row.split()) >= 2]
 
 
+def read_postcollapse(path: Path):
+    rows = []
+    for row in path.read_text().splitlines():
+        fields = row.split()
+        if not fields or fields[0] == "#":
+            continue
+        rows.append(tuple(map(float, fields)))
+    return rows
+
+
 def load_font(size: int, bold=False):
     candidates = [
         "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
-        if bold
-        else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
         "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
     ]
     for name in candidates:
@@ -71,7 +94,7 @@ def vertical_text(image, text, text_font, scale=2):
     image.paste(label, (19 * scale, (HEIGHT * scale - label.height) // 2), label)
 
 
-def render(bubble, step, count, time_value, ratio, centroid):
+def render(positive, negative, step, count, time_value, ratio, centroid, ring=None):
     scale = 2
     image = Image.new("RGB", (WIDTH * scale, HEIGHT * scale), (7, 16, 29))
     draw = ImageDraw.Draw(image)
@@ -84,7 +107,7 @@ def render(bubble, step, count, time_value, ratio, centroid):
     draw.text((1200 * scale, 38 * scale), "Axisymmetric BEM · γ = 1.5", font=body, fill=(126, 156, 178), anchor="ra")
     draw.rounded_rectangle((left, top, right, bottom), radius=12 * scale, fill=(11, 27, 43), outline=(47, 73, 92), width=2 * scale)
 
-    for tick in (-3, -2, -1, 0, 1, 2, 3):
+    for tick in (-2, -1, 0, 1, 2):
         a, b = xy((tick, YLIM[0]), scale), xy((tick, YLIM[1]), scale)
         draw.line((a, b), fill=(26, 48, 65), width=scale)
         draw.text((a[0], bottom + 11 * scale), str(tick), font=small, fill=(121, 151, 170), anchor="ma")
@@ -100,21 +123,41 @@ def render(bubble, step, count, time_value, ratio, centroid):
     axis_a, axis_b = xy((0, 0), scale), xy((0, YLIM[1]), scale)
     draw.line((axis_a, axis_b), fill=(78, 109, 129), width=scale)
 
-    polygon = [xy(point, scale) for point in bubble]
-    draw.polygon(polygon, fill=(12, 158, 174))
-    draw.line(polygon + [polygon[0]], fill=(151, 244, 244), width=3 * scale, joint="curve")
+    positive_pixels = [xy(point, scale) for point in positive]
+    negative_pixels = [xy(point, scale) for point in negative]
+    if ring is None:
+        polygon = positive_pixels + list(reversed(negative_pixels))
+        draw.polygon(polygon, fill=(12, 158, 174))
+        draw.line(polygon + [polygon[0]], fill=(151, 244, 244), width=3 * scale, joint="curve")
+        phase = "pre-collapse · jet formation"
+    else:
+        # Closed signed-r contours must be drawn separately after reconnection.
+        for polygon in (positive_pixels, negative_pixels):
+            draw.polygon(polygon, fill=(12, 158, 174))
+            draw.line(polygon + [polygon[0]], fill=(151, 244, 244), width=3 * scale, joint="curve")
+        a_vr, c_vr = ring
+        ring_left = xy((-a_vr, c_vr), scale)
+        ring_right = xy((a_vr, c_vr), scale)
+        ring_color = (244, 117, 204)
+        draw.line((ring_left, ring_right), fill=ring_color, width=2 * scale)
+        radius = 4 * scale
+        for center in (ring_left, ring_right):
+            draw.ellipse((center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius), fill=ring_color, outline=(255, 218, 244), width=scale)
+        draw.text((ring_right[0] + 8 * scale, ring_right[1] - 3 * scale), "vortex ring", font=small, fill=ring_color, anchor="lm")
+        phase = "post-collapse · toroidal bubble"
 
     draw.text((112 * scale, 110 * scale), f"step {step:03d} / {count}", font=body, fill=(221, 235, 242))
     draw.text((112 * scale, 139 * scale), f"t* = {time_value:.5f}", font=body, fill=(148, 187, 207))
     draw.text((112 * scale, 168 * scale), f"V / V0 = {ratio:.5f}", font=body, fill=(116, 225, 225))
     draw.text((112 * scale, 197 * scale), f"zc / R0 = {centroid:.5f}", font=body, fill=(177, 199, 211))
+    draw.text((112 * scale, 226 * scale), phase, font=small, fill=(207, 171, 219))
     draw.text((650 * scale, 687 * scale), "radial coordinate r / R0", font=body, fill=(160, 181, 194), anchor="ma")
     vertical_text(image, "height above wall z / R0", body, scale)
 
     x0, y0, x1, y1 = 948 * scale, 116 * scale, 1168 * scale, 132 * scale
     draw.rounded_rectangle((x0, y0, x1, y1), radius=8 * scale, fill=(28, 52, 69))
     draw.rounded_rectangle((x0, y0, x0 + (x1 - x0) * step / count, y1), radius=8 * scale, fill=(21, 190, 198))
-    draw.text((x1, 143 * scale), "collapse progress", font=small, fill=(127, 159, 176), anchor="ra")
+    draw.text((x1, 143 * scale), "simulation progress", font=small, fill=(127, 159, 176), anchor="ra")
     return image.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
 
 
@@ -149,25 +192,62 @@ def encode(image):
 
 
 def main():
-    output = Path(__file__).resolve().parent / "wall-output"
-    simulation = read_frames(output / "WALL-CAVITATION.plt")
-    ratios = read_history(output / "RATIO.TXT")
-    centroids = read_history(output / "CENT.TXT")
+    root = Path(__file__).resolve().parent
+    run_dir = root / "run" / "post-collapse-debug"
+    output_dir = root / "output" / "postcollapse_movie"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    simulation = read_half_frames(run_dir / "WALL-CAVITATION-HALF.plt")
+    ratios = read_history(run_dir / "RATIO.TXT")
+    centroids = read_history(run_dir / "CENT.TXT")
+    postcollapse = read_postcollapse(run_dir / "POSTCOLLAPSE_DIAG.dat")
     if min(len(ratios), len(centroids)) < len(simulation) + 1:
         raise ValueError("History files do not contain one record per simulation frame")
+    if not postcollapse:
+        raise ValueError("POSTCOLLAPSE_DIAG.dat contains no post-collapse records")
 
-    encoded, preview = [], None
-    for index, (bubble, _wall) in enumerate(simulation, 1):
-        time_value, ratio = ratios[index]
-        _, centroid = centroids[index]
-        image = render(bubble, index, len(simulation), time_value, ratio, centroid)
+    times = [ratios[index][0] for index in range(1, len(simulation) + 1)]
+    post_start = min(range(len(times)), key=lambda index: abs(times[index] - postcollapse[0][0]))
+    if abs(times[post_start] - postcollapse[0][0]) > 5e-6:
+        raise ValueError("Could not align post-collapse diagnostics with geometry")
+    if len(simulation) - post_start != len(postcollapse):
+        raise ValueError(f"Post-collapse geometry/diagnostic count mismatch: {len(simulation) - post_start} versus {len(postcollapse)}")
+    for offset, row in enumerate(postcollapse):
+        if abs(times[post_start + offset] - row[0]) > 5e-6:
+            raise ValueError(f"Post-collapse time mismatch at diagnostic row {offset + 1}")
+
+    encoded = []
+    preview = None
+    for index, (positive, negative) in enumerate(simulation):
+        history_index = index + 1
+        time_value, ratio = ratios[history_index]
+        _, centroid = centroids[history_index]
+        ring = None
+        if index >= post_start:
+            diagnostic = postcollapse[index - post_start]
+            ring = (diagnostic[2], diagnostic[3])
+        image = render(positive, negative, history_index, len(simulation), time_value, ratio, centroid, ring)
         encoded.append(encode(image))
-        if index == len(simulation) // 3:
+        if index == post_start:
             preview = image.copy()
-    encoded = [encoded[0]] * FPS + encoded + [encoded[-1]] * FPS
-    write_avi(output / "wall-cavitation.avi", encoded)
-    preview.save(output / "wall-cavitation-preview.png")
-    print(f"Wrote {len(encoded)} AVI frames from {len(simulation)} simulation steps")
+
+    # Every state appears once; brief holds make the transition readable.
+    timeline = [encoded[0]] * FPS
+    for index, frame in enumerate(encoded):
+        timeline.append(frame)
+        if index in (post_start - 1, post_start):
+            timeline.extend([frame] * (FPS // 2))
+    timeline.extend([encoded[-1]] * FPS)
+
+    avi_path = output_dir / "postcollapse_movie.avi"
+    preview_path = output_dir / "postcollapse_movie-preview.png"
+    write_avi(avi_path, timeline)
+    preview.save(preview_path)
+    print(f"Wrote {len(timeline)} AVI frames at {FPS} fps")
+    print(f"Included all {len(simulation)} accepted simulation steps")
+    print(f"Post-collapse: {len(postcollapse)} steps, simulation frames {post_start + 1}-{len(simulation)}")
+    print(f"AVI: {avi_path}")
+    print(f"Preview: {preview_path}")
 
 
 if __name__ == "__main__":
