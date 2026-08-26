@@ -35,6 +35,99 @@ C=======================================================================
       PARAMETER (NFR=161,NFZ=161)
       LOGICAL FIELD_ENABLED
       PARAMETER (FIELD_ENABLED=.TRUE.)
+<<<<<<< Updated upstream
+=======
+      LOGICAL POSTCOLLAPSE_ENABLED
+      PARAMETER (POSTCOLLAPSE_ENABLED=.TRUE.)
+      INTEGER BUBBLE_TOPOLOGY,NVR,POST_STEPS,NRELOC,NREDIST
+      INTEGER REBOUND_POSITIVE_COUNT,REBOUND_FIRST_POSITIVE_STEP
+      INTEGER COMP_OF_PANEL,KSTART
+      INTEGER PRE_IMPACT,TOROIDAL,TWO_COMPONENT
+      PARAMETER (PRE_IMPACT=0,TOROIDAL=1,TWO_COMPONENT=2)
+      PARAMETER (MAXCOMP=2,MAXVR=2)
+C     Runtime-selected: the two-daughter split restart runs only when a
+C     PRECONTACT_RESTART.dat checkpoint is present in the working
+C     directory.  With no such file this is .FALSE. and the solver runs
+C     a normal fresh case, so the disabled-path baseline is unaffected.
+      LOGICAL SECOND_SPLIT_RESTART
+C=======================================================================
+C     TEMPORARY FAR-BUBBLE EXPERIMENT (branch temporary-far-bubble only)
+C
+C     Deliberately nonphysical numerical bypass.  Once the bubble
+C     reaches the toroidal state, the bubble alone (never the vortex
+C     ring) is translated far away in Z for a short interval, evolves
+C     there under the unmodified solver physics, then is translated
+C     back, in order to test whether this avoids repeated post-collapse
+C     self-contact.  Runtime-switched via FAR-BUBBLE.TXT; with that
+C     file absent FAR_BUBBLE_ENABLED stays .FALSE. and every block
+C     below is inert, reproducing the unmodified reference exactly.
+C=======================================================================
+      LOGICAL FAR_BUBBLE_ENABLED,FAR_BUBBLE_ACTIVE,FAR_BUBBLE_DONE
+      LOGICAL FAR_TOR_DETECTED,FAR_T1_DONE,FAR_T2_DONE
+      LOGICAL FAR_ARRIVE_T1
+      DOUBLE PRECISION FAR_SHIFT
+      PARAMETER (FAR_SHIFT=20.0D0)
+      DOUBLE PRECISION FAR_DURATION,FAR_T_TOR,FAR_T1,FAR_T2
+      DOUBLE PRECISION FAR_VOL_BEFORE,FAR_VOL_AFTER,FAR_MAXQERR
+      DOUBLE PRECISION FAR_MAXUVR_FAR,FARUTMP,FARVTMP
+      DOUBLE PRECISION FAR_DTIME_BEFORE
+C-----------------------------------------------------------------------
+C     RING SELF-ADVECTION OVER t1->t2.
+C
+C     With the bubble translated away and frozen, the vortex ring is the
+C     only object left that can evolve.  It is advected here under its
+C     own self-induced translation plus its wall image, with circulation
+C     conserved (Kelvin).  The singular self-induction of an ideal
+C     filament requires a core radius; it is taken from the ring's
+C     measured clearance to the bubble surface at t1 (the natural core
+C     scale of the vortical region in this model) rather than being a
+C     free invented constant.  FAR_RING_NSUB substeps of RK4 integrate
+C     the two-scalar ODE; this costs no BEM solves.
+C-----------------------------------------------------------------------
+      INTEGER FAR_RING_NSUB
+      PARAMETER (FAR_RING_NSUB=2000)
+      DOUBLE PRECISION FAR_QTOTSAVE(NPA),FAR_QVRSAVE(NPA)
+      DOUBLE PRECISION FAR_RING_CORE,FAR_AVR_T1,FAR_CVR_T1
+      DOUBLE PRECISION FAR_RING_DMIN_T1,FAR_RING_HLOC_T1
+      DOUBLE PRECISION FAR_RING_ETA_T1,FAR_RING_CLEAR_T2
+      INTEGER FAR_RING_INSIDE_T2,FAR_JCLOSE_T1
+C-----------------------------------------------------------------------
+C     FINAL-DIAGNOSTIC-ONLY: WINDING/REMJUMP AT T1, AND THE GENUINE
+C     ROUND-TRIP CLOSURE ERRORS AT T2 (NOT THE TAUTOLOGICAL FAR_MAXQERR
+C     CHECK ABOVE).  ADDED SOLELY TO ANSWER AN EXPLICIT DIAGNOSTIC
+C     REQUEST; NO OTHER BEHAVIOR IS CHANGED BY THESE DECLARATIONS.
+C-----------------------------------------------------------------------
+      DOUBLE PRECISION FAR_ZSNAP(NPA),FAR_RSNAP(NPA)
+      DOUBLE PRECISION FAR_QREMSNAP(NPA)
+      DOUBLE PRECISION FAR_WINDING_BEFORE,FAR_WINDING_AFTER
+      DOUBLE PRECISION FAR_REMJUMP_BEFORE,FAR_REMJUMP_AFTER
+      DOUBLE PRECISION FAR_ROUNDTRIP_MAXQREM,FAR_ROUNDTRIP_MAXZ
+      DOUBLE PRECISION FAR_ROUNDTRIP_MAXR
+C-----------------------------------------------------------------------
+C     FAR-BUBBLE-SPECIFIC MIN/MAX-VOLUME REBOUND TRACKING
+C
+C     The ordinary STOP_AFTER_REBOUND criterion (5 consecutive accepted
+C     steps of positive dV/dt) only detects the ONSET of rebound and is
+C     vulnerable to sub-percent timestep-scale volume jitter; this was
+C     observed to false-fire while the far-translated bubble was still
+C     collapsing/self-contacting.  When FAR_BUBBLE_ENABLED, that trigger
+C     is bypassed (see the REBOUND_POSITIVE_COUNT guard below) in favor
+C     of this dedicated running min/max tracker, which confirms the
+C     first post-collapse volume MAXIMUM only after a genuine fractional
+C     rise from the minimum and a genuine fractional fall, sustained
+C     over a real physical-time span, from the maximum.  When disabled,
+C     none of this executes and STOP_AFTER_REBOUND behaves exactly as
+C     before.
+C-----------------------------------------------------------------------
+      LOGICAL FAR_MIN_CONFIRMED,FAR_MAX_CONFIRMED,FAR_DIVERGED
+      DOUBLE PRECISION FAR_VMIN,FAR_TMIN,FAR_VMAX,FAR_TMAX
+      DOUBLE PRECISION FAR_MAXVEL_REBOUND
+      DOUBLE PRECISION FAR_RISE_THRESH,FAR_FALL_THRESH,FAR_CONFIRM_DT
+      PARAMETER (FAR_RISE_THRESH=0.02D0,FAR_FALL_THRESH=0.02D0)
+      PARAMETER (FAR_CONFIRM_DT=1.0D-5)
+      COMMON/POST_TOPOLOGY/BUBBLE_TOPOLOGY
+      PARAMETER (POLYEXP=1.25D0)
+>>>>>>> Stashed changes
       INTEGER FIELD_CALC_EVERY,FIELD_OUTPUT_EVERY
       PARAMETER (FIELD_CALC_EVERY=1,FIELD_OUTPUT_EVERY=10)
       PARAMETER (FIELD_INVALID=-1.0D30)
@@ -162,6 +255,91 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       D4=.00526450
       III=0
       MTE=0
+<<<<<<< Updated upstream
+=======
+      BUBBLE_TOPOLOGY=PRE_IMPACT
+      NVR=0
+      POST_STEPS=0
+      NRELOC=0
+      NREDIST=0
+      REBOUND_POSITIVE_COUNT=0
+      REBOUND_FIRST_POSITIVE_STEP=0
+      HAVE_POST_VOLUME=.FALSE.
+      HAVE_DVDT=.FALSE.
+      REBOUND_CANDIDATE=.FALSE.
+      REBOUND_CONFIRMED=.FALSE.
+      STOP_AFTER_REBOUND=.FALSE.
+      REDISTRIBUTION_PENDING=.FALSE.
+      CONTACT_RETRY_ACTIVE=.FALSE.
+      INQUIRE(FILE='PRECONTACT_RESTART.dat',EXIST=SECOND_SPLIT_RESTART)
+      FAR_BUBBLE_ENABLED=.FALSE.
+      FAR_BUBBLE_ACTIVE=.FALSE.
+      FAR_BUBBLE_DONE=.FALSE.
+      FAR_TOR_DETECTED=.FALSE.
+      FAR_T1_DONE=.FALSE.
+      FAR_T2_DONE=.FALSE.
+      FAR_ARRIVE_T1=.FALSE.
+      FAR_DURATION=0.01D0
+      OPEN(UNIT=777,FILE='FAR-BUBBLE.TXT',STATUS='OLD',IOSTAT=IOSFAR)
+      IF (IOSFAR.EQ.0) THEN
+      READ(777,*,IOSTAT=IOSFAR2)IFARFLAG,FAR_DURATION
+      IF (IOSFAR2.EQ.0.AND.IFARFLAG.EQ.1) FAR_BUBBLE_ENABLED=.TRUE.
+      CLOSE(777)
+      ENDIF
+      IF (FAR_BUBBLE_ENABLED) THEN
+      OPEN(UNIT=778,FILE='FAR_BUBBLE_DIAG.dat',STATUS='REPLACE')
+      WRITE(778,*)'# FAR-BUBBLE EXPERIMENT (NONPHYSICAL, TEMPORARY)'
+      WRITE(778,*)'# FAR_SHIFT=',FAR_SHIFT,' FAR_DURATION=',
+     &FAR_DURATION
+      CALL FLUSH(778)
+      WRITE(*,*)'FAR-BUBBLE EXPERIMENT ENABLED. FAR_SHIFT=',FAR_SHIFT,
+     &' DURATION=',FAR_DURATION
+      ENDIF
+      FAR_MIN_CONFIRMED=.FALSE.
+      FAR_MAX_CONFIRMED=.FALSE.
+      FAR_DIVERGED=.FALSE.
+      FAR_VMIN=1.0D100
+      FAR_TMIN=0.0D0
+      FAR_VMAX=-1.0D100
+      FAR_TMAX=0.0D0
+      FAR_MAXVEL_REBOUND=0.0D0
+      CONTACT_RETRY_COUNT=0
+      CONTACT_DTD_LIMIT=1.0D100
+      CONTACT_RETRY_DTD=1.0D100
+      SECOND_SPLIT_DONE=.FALSE.
+      MULTI_REBUILD_PENDING=.FALSE.
+      MULTI_REDIS_PENDING=.FALSE.
+      NCOMP=1
+      DO 13551 IC=1,MAXCOMP
+      MCOMP(IC)=0
+      ISTART(IC)=0
+      IEND(IC)=0
+      VCOMP(IC)=0.0D0
+      CCOMP(IC)=0.0D0
+      VREFCOMP(IC)=0.0D0
+      PGASCOMP(IC)=0.0D0
+      MESH_RATIO_COMP(IC)=0.0D0
+      QRECOMP_COMP(IC)=0.0D0
+      QCLOSURE_COMP(IC)=0.0D0
+      NRELOC_COMP(IC)=0
+      AVRD(IC)=0.0D0
+      CVRD(IC)=0.0D0
+      GAMMAD(IC)=0.0D0
+13551 CONTINUE
+      DO 13550 J=1,NPA
+      COMP_OF_PANEL(J)=0
+      NEXT_NODE(J)=0
+13550 CONTINUE
+      GAMMA_PARENT=-4.4051740167728548D0
+      MAX_TOTAL_VELOCITY_RUN=0.0D0
+      MAX_Q_RECOMP_ALL=0.0D0
+      MAX_REDIS_VOLUME_ERROR=0.0D0
+      KSTART=1
+      AVR=0.0D0
+      CVR=0.0D0
+      CIRC_VR=0.0D0
+      REMJUMP=0.0D0
+>>>>>>> Stashed changes
       R0=R0D*RM
       RMD=RM/RM
       GAMA=HPRIME
@@ -567,6 +745,46 @@ CSAL	&+EPS*((VOLI/VOLT)**1.4)
 CSAL     &-((1000.*9.81*RM)/(P1INF-PC))*(ZZ(LL)-GAMA))
       DTD=ADFD/(1.+0.5*(VMAX)**2
      &+EPS*((VOLI/VOLT)**1.25))
+<<<<<<< Updated upstream
+=======
+      IF (BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT) THEN
+      DTD=ADFD/(1.0D0+0.5D0*VMAX**2+PGASMAX)
+C     Limit one predictor displacement to five percent of the shortest
+C     physical daughter panel.  This stabilizes the unchanged Heun scheme on
+C     the much smaller satellite without altering the evolution equations.
+      HMIN_MULTI=1.0D100
+      DO 2552 IC=1,NCOMP
+      CALL COMPONENT_MESH_QUALITY(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ISTART(IC),IEND(IC),HMN,HMX,MRAT,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED DAUGHTER CFL MESH MEASURE'
+      STOP
+      ENDIF
+      HMIN_MULTI=DMIN1(HMIN_MULTI,HMN)
+ 2552 CONTINUE
+      CFL_DTD=0.05D0*HMIN_MULTI/DMAX1(VMAX,1.0D-12)
+      DTD=DMIN1(DTD,CFL_DTD)
+      ENDIF
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      DTD=DMIN1(DTD,CONTACT_DTD_LIMIT)
+      IF (CONTACT_RETRY_ACTIVE) THEN
+      DTD=DMIN1(DTD,CONTACT_RETRY_DTD)
+      CONTACT_RETRY_ACTIVE=.FALSE.
+      ENDIF
+      ENDIF
+      IF (FAR_BUBBLE_ENABLED.AND.FAR_TOR_DETECTED.AND.
+     &BUBBLE_TOPOLOGY.EQ.TOROIDAL.AND..NOT.FAR_T1_DONE) THEN
+C     The bubble is FROZEN for the whole t1->t2 interval (no evolution,
+C     see the atomic out+back block below), so DTD only ever needs
+C     capping to land exactly on t1; t2 is reached by a direct time
+C     jump, not by further stepping, so no corresponding t2 cap is
+C     needed here.
+      IF (DTD.GE.FAR_T1-DTIME) THEN
+      DTD=FAR_T1-DTIME
+      FAR_ARRIVE_T1=.TRUE.
+      ENDIF
+      ENDIF
+>>>>>>> Stashed changes
       DTIME=DTIME+DTD
       WRITE(12,161)DTIME
       ENDIF
@@ -687,7 +905,127 @@ CSAL      CRITER1=Z(1)-Z(M+1)
       WRITE(*,*) 'CRITER1 IS LESS THAN',CRITER
       STOP
       ENDIF
+<<<<<<< Updated upstream
       DO 311  J=2,M
+=======
+C     The legacy stop is reached by the rejected ILS=1 predictor in the
+C     supplied case.  Restore the last accepted pre-impact state before
+C     creating the ring and changing topology.
+      IF (ILS.EQ.1) THEN
+      DO 1311 J=1,M+1
+      R(J)=RI(J)
+      Z(J)=ZI(J)
+ 1311 CONTINUE
+      DO 1312 J=1,M
+      FID(J)=FIDI(J)
+ 1312 CONTINUE
+      DTIME=DTIME-DTD
+      ENDIF
+      DO 1313 J=1,M
+      DH(J)=DL(J+1)-DL(J)
+ 1313 CONTINUE
+      CALL FINDFIF1(FID,DH,FIDL1,M)
+      CALL FINDFIF2(FID,DH,FIDL2,M)
+      CALL CUBSPLFI(FID,DH,FIDL1,FIDL2,DL2,AFI,BFI,CFI,DFI,M)
+      EQDL=DL(M+1)/M
+      CALL REDISFI(DL2,EQDL,AFI,BFI,CFI,DFI,FIDLN,M)
+      FIDL(1)=FIDL1
+      DO 1314 J=2,M
+      FIDL(J)=FIDLN(J)
+ 1314 CONTINUE
+      FIDL(M+1)=FIDL2
+      CALL COMPUTE_VORTEX_RING_LOCATION(R,Z,M,AVR,CVR)
+      CIRC_VR=FIDL(M+1)-FIDL(1)
+      CALL VERIFY_VORTEX_RING_LOCATION(R,Z,M,AVR,CVR,
+     &RING_CLEAR,IRINGOK)
+      IF (IRINGOK.EQ.0) THEN
+      WRITE(*,*)'VORTEX RING LOCATION FAILED GEOMETRY CHECK',
+     &AVR,CVR,RING_CLEAR
+      STOP
+      ENDIF
+      CALL COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,CIRC_VR,QVR,QVR_NODE,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO COMPUTE PRE-RECONNECTION QVR'
+      STOP
+      ENDIF
+      DO 1315 J=1,M+1
+      QREM_NODE(J)=FIDL(J)-QVR_NODE(J)
+ 1315 CONTINUE
+      OPEN(UNIT=321,FILE='POSTCOLLAPSE_BEFORE.plt',STATUS='REPLACE')
+      WRITE(321,*)'VARIABLES="R","Z","Q","QVR","QREM"'
+      WRITE(321,*)'ZONE I=',M+1,', F=POINT'
+      DO 1316 J=1,M+1
+      WRITE(321,*)R(J),Z(J),FIDL(J),QVR_NODE(J),QREM_NODE(J)
+ 1316 CONTINUE
+      CLOSE(321)
+C     Remove the two axial contact tips and use one common closure point
+C     midway between their immediate neighbours.  M+1 is the compatibility
+C     copy of node 1, so panel M is the physical closing panel.
+      RCLOSE=0.5D0*(R(2)+R(M))
+      ZCLOSE=0.5D0*(Z(2)+Z(M))
+      QCLOSE=0.25D0*(QREM_NODE(1)+QREM_NODE(2)
+     &+QREM_NODE(M)+QREM_NODE(M+1))
+      R(1)=RCLOSE
+      Z(1)=ZCLOSE
+      R(M+1)=RCLOSE
+      Z(M+1)=ZCLOSE
+      QREM_NODE(1)=QCLOSE
+      QREM_NODE(M+1)=QCLOSE
+      REMJUMP=DABS(QREM_NODE(M+1)-QREM_NODE(1))
+      BUBBLE_TOPOLOGY=TOROIDAL
+      NVR=1
+      IF (FAR_BUBBLE_ENABLED.AND..NOT.FAR_TOR_DETECTED) THEN
+      FAR_T_TOR=DTIME
+      FAR_T1=FAR_T_TOR+0.001D0
+      FAR_T2=FAR_T1+FAR_DURATION
+      FAR_TOR_DETECTED=.TRUE.
+      WRITE(778,*)'# T_TOR=',FAR_T_TOR
+      WRITE(778,*)'# T1=',FAR_T1
+      WRITE(778,*)'# T2=',FAR_T2
+      CALL FLUSH(778)
+      WRITE(*,*)'FAR-BUBBLE ARMED: T_TOR=',FAR_T_TOR,' T1=',FAR_T1,
+     &' T2=',FAR_T2
+      ENDIF
+      CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO BUILD CLOSED TOROIDAL GEOMETRY'
+      STOP
+      ENDIF
+      CALL PERIODIC_SPLINE_NODES(QREM_NODE,DL,AFI,BFI,CFI,DFI,
+     &M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO BUILD INITIAL PERIODIC QREM'
+      STOP
+      ENDIF
+      CALL CUSPFID(DL,AFI,BFI,CFI,DFI,FID,M)
+      CALL COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,CIRC_VR,QVR,QVR_NODE,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO COMPUTE POST-RECONNECTION QVR'
+      STOP
+      ENDIF
+      DO 1317 J=1,M
+      QREM(J)=FID(J)
+      QTOTAL(J)=QREM(J)+QVR(J)
+ 1317 CONTINUE
+      OPEN(UNIT=322,FILE='POSTCOLLAPSE_AFTER.plt',STATUS='REPLACE')
+      WRITE(322,*)'VARIABLES="R","Z","QREM","QVR"'
+      WRITE(322,*)'ZONE I=',M+1,', F=POINT'
+      DO 1318 J=1,M+1
+      WRITE(322,*)R(J),Z(J),QREM_NODE(J),QVR_NODE(J)
+ 1318 CONTINUE
+      CLOSE(322)
+      WRITE(*,*)'POST-COLLAPSE TRANSITION AT T=',DTIME
+      WRITE(*,*)'VORTEX RING A,C,CIRC=',AVR,CVR,CIRC_VR
+      WRITE(*,*)'RING CLEARANCE, QREM JUMP=',RING_CLEAR,REMJUMP
+      ILS=1
+      GO TO 821
+      ENDIF
+      IF (BUBBLE_TOPOLOGY.EQ.PRE_IMPACT) THEN
+      DO 311 J=2,M
+>>>>>>> Stashed changes
 CSAL	IF (R(J).LT.0.02) THEN
       IF (R(J).LT.0.0001) THEN
       PRINT*,'R(J)<0.0001','J=',J,'R(J)=',R(J)
@@ -798,7 +1136,628 @@ CSAL 171  FORMAT(1X,F12.5,5X,F12.5)
       WRITE(133,6171)1000.*dtime*RM*(D/(P1INF-PC))**.5,RATIO
       WRITE(15,6171)dtime,CEN 
       WRITE(155,6171)1000.*dtime*RM*(D/(P1INF-PC))**.5,CEN 
+<<<<<<< Updated upstream
  6171 FORMAT(F12.5,2x,f12.5) 
+=======
+      IF (BUBBLE_TOPOLOGY.NE.PRE_IMPACT) THEN
+      POST_STEPS=POST_STEPS+1
+      IF (VOLT.LE.0.0D0) THEN
+      WRITE(*,*)'NON-POSITIVE TOROIDAL BUBBLE VOLUME',VOLT
+      STOP
+      ENDIF
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      CALL WRITE_POSTCOLLAPSE_DIAGNOSTIC(320,DTIME,
+     &BUBBLE_TOPOLOGY,AVR,CVR,CIRC_VR,VOLT,CEN,R,Z,QREM,
+     &UREM,VREM,UVR,VVR,UCP,VCP,REMJUMP,M)
+      ENDIF
+      WRITE(*,*)'POST-COLLAPSE ACCEPTED STEP',POST_STEPS,
+     &' TIME=',DTIME,' VOLUME=',VOLT
+C
+C     Rebound detection uses corrected, accepted volumes only.  Five
+C     consecutive positive increments establish the first rebound.
+      DVDT_CURRENT=0.0D0
+      IF (.NOT.HAVE_POST_VOLUME) THEN
+      HAVE_POST_VOLUME=.TRUE.
+      ELSE
+      DT_ACCEPTED=DTIME-TIME_PREV_ACCEPTED
+      IF (DT_ACCEPTED.LE.0.0D0) THEN
+      WRITE(*,*)'NON-POSITIVE ACCEPTED TIME IN REBOUND DETECTOR'
+      STOP
+      ENDIF
+      DVDT_CURRENT=(VOLT-VOLUME_PREV_ACCEPTED)/DT_ACCEPTED
+      IF (HAVE_DVDT) THEN
+      IF (.NOT.REBOUND_CANDIDATE) THEN
+      IF (DVDT_PREV.LT.0.0D0.AND.DVDT_CURRENT.GT.0.0D0) THEN
+      REBOUND_CANDIDATE=.TRUE.
+      REBOUND_POSITIVE_COUNT=1
+      REBOUND_TIME=TIME_PREV_ACCEPTED
+      REBOUND_MIN_VOLUME=VOLUME_PREV_ACCEPTED
+      IF (BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT) THEN
+      VCOMP_REBOUND(1)=VCOMP(1)
+      VCOMP_REBOUND(2)=VCOMP(2)
+      ENDIF
+      REBOUND_FIRST_POSITIVE_STEP=K
+      WRITE(*,*)'REBOUND MINIMUM CANDIDATE AT T=',REBOUND_TIME,
+     &' VOLUME=',REBOUND_MIN_VOLUME
+      ENDIF
+      ELSEIF (.NOT.REBOUND_CONFIRMED) THEN
+      IF (DVDT_CURRENT.GT.0.0D0) THEN
+      REBOUND_POSITIVE_COUNT=REBOUND_POSITIVE_COUNT+1
+      ELSE
+      REBOUND_CANDIDATE=.FALSE.
+      REBOUND_POSITIVE_COUNT=0
+      ENDIF
+      ENDIF
+      ENDIF
+      DVDT_PREV=DVDT_CURRENT
+      HAVE_DVDT=.TRUE.
+      ENDIF
+      IREBOUND_STATE=0
+      IF (REBOUND_CANDIDATE) IREBOUND_STATE=1
+      IF (REBOUND_POSITIVE_COUNT.GE.5.AND..NOT.FAR_BUBBLE_ENABLED) THEN
+      REBOUND_CONFIRMED=.TRUE.
+      STOP_AFTER_REBOUND=.TRUE.
+      IREBOUND_STATE=2
+      ENDIF
+      WRITE(324,1701)K,POST_STEPS,DTIME,VOLT,RATIO,
+     &DVDT_CURRENT,IREBOUND_STATE
+      CALL FLUSH(324)
+ 1701 FORMAT(1X,I8,1X,I8,4(1X,ES20.11),1X,I2)
+      VOLUME_PREV_ACCEPTED=VOLT
+      TIME_PREV_ACCEPTED=DTIME
+      IF (FAR_BUBBLE_ENABLED.AND.BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      IF (VMAX.NE.VMAX.OR.VMAX.GT.1.0D5.OR.DTD.NE.DTD.OR.
+     &DTD.LE.0.0D0.OR.VOLT.NE.VOLT) THEN
+      FAR_DIVERGED=.TRUE.
+      WRITE(*,*)'==========================================='
+      WRITE(*,*)'FAR-BUBBLE: GENUINE NUMERICAL FAILURE DETECTED'
+      WRITE(*,*)'THIS IS NOT A REBOUND MAXIMUM -- DO NOT REPORT',
+     &' IT AS ONE'
+      WRITE(*,*)'T=',DTIME,' K=',K,' VMAX=',VMAX,' DTD=',DTD,
+     &' VOLT=',VOLT
+      WRITE(*,*)'RUNNING MIN SO FAR: T_MIN=',FAR_TMIN,' V_MIN=',
+     &FAR_VMIN
+      IF (FAR_MIN_CONFIRMED) THEN
+      WRITE(*,*)'RUNNING MAX SO FAR (UNCONFIRMED): T_MAX=',FAR_TMAX,
+     &' V_MAX=',FAR_VMAX
+      ENDIF
+      WRITE(*,*)'==========================================='
+      STOP
+      ENDIF
+      IF (VOLT.LT.FAR_VMIN) THEN
+      FAR_VMIN=VOLT
+      FAR_TMIN=DTIME
+      ENDIF
+      IF (.NOT.FAR_MIN_CONFIRMED.AND.
+     &VOLT.GE.FAR_VMIN*(1.0D0+FAR_RISE_THRESH)) THEN
+      FAR_MIN_CONFIRMED=.TRUE.
+      FAR_VMAX=VOLT
+      FAR_TMAX=DTIME
+      WRITE(*,*)'FAR-BUBBLE: POST-COLLAPSE MINIMUM CONFIRMED AT T=',
+     &FAR_TMIN,' V_MIN=',FAR_VMIN,' V_MIN/V0=',FAR_VMIN/VOLI
+      ENDIF
+      IF (FAR_MIN_CONFIRMED.AND..NOT.FAR_MAX_CONFIRMED) THEN
+      FAR_MAXVEL_REBOUND=DMAX1(FAR_MAXVEL_REBOUND,VMAX)
+      IF (VOLT.GT.FAR_VMAX) THEN
+      FAR_VMAX=VOLT
+      FAR_TMAX=DTIME
+      ENDIF
+      IF (VOLT.LE.FAR_VMAX*(1.0D0-FAR_FALL_THRESH).AND.
+     &(DTIME-FAR_TMAX).GE.FAR_CONFIRM_DT) THEN
+      FAR_MAX_CONFIRMED=.TRUE.
+      WRITE(*,*)'==========================================='
+      WRITE(*,*)'FAR-BUBBLE: FIRST REBOUND MAXIMUM CONFIRMED'
+      WRITE(*,*)'T_MIN=',FAR_TMIN,' V_MIN=',FAR_VMIN,
+     &' V_MIN/V0=',FAR_VMIN/VOLI
+      WRITE(*,*)'T_MAX=',FAR_TMAX,' V_MAX=',FAR_VMAX,
+     &' V_MAX/V0=',FAR_VMAX/VOLI
+      WRITE(*,*)'EXPANSION RATIO V_MAX/V_MIN=',FAR_VMAX/FAR_VMIN
+      WRITE(*,*)'MAX SURFACE VELOCITY DURING REBOUND=',
+     &FAR_MAXVEL_REBOUND
+      WRITE(*,*)'==========================================='
+      OPEN(UNIT=779,FILE='FAR_BUBBLE_REBOUND_SUMMARY.dat',
+     &STATUS='REPLACE')
+      WRITE(779,*)'# T_MIN V_MIN V_MIN_OVER_V0'
+      WRITE(779,*)FAR_TMIN,FAR_VMIN,FAR_VMIN/VOLI
+      WRITE(779,*)'# T_MAX V_MAX V_MAX_OVER_V0'
+      WRITE(779,*)FAR_TMAX,FAR_VMAX,FAR_VMAX/VOLI
+      WRITE(779,*)'# EXPANSION_RATIO_VMAX_OVER_VMIN'
+      WRITE(779,*)FAR_VMAX/FAR_VMIN
+      WRITE(779,*)'# MAX_SURFACE_VELOCITY_DURING_REBOUND'
+      WRITE(779,*)FAR_MAXVEL_REBOUND
+      CLOSE(779)
+      STOP
+      ENDIF
+      ENDIF
+      ENDIF
+C
+C     The ideal filament may be moved only here, at a corrected accepted
+C     toroidal state.  The next ILS=1 pass re-solves the BEM at this same
+C     time and geometry before any further time advancement.
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      CALL COMPUTE_RING_CLEARANCE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,RING_DMIN,HLOCAL,RING_ETA,JCLOSE,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO MEASURE VORTEX-RING CLEARANCE'
+      STOP
+      ENDIF
+      CALL MAX_VORTEX_RING_SPEED(RR,ZZ,AVR,CVR,CIRC_VR,M,
+     &MAXUVR_OLD,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO EVALUATE ACCEPTED-STATE RING SPEED'
+      STOP
+      ENDIF
+      WRITE(325,1702)K,POST_STEPS,DTIME,AVR,CVR,RING_DMIN,
+     &HLOCAL,RING_ETA,MAXUVR_OLD
+      CALL FLUSH(325)
+ 1702 FORMAT(1X,I8,1X,I8,7(1X,ES20.11))
+      IF (RING_ETA.LT.1.0D0.AND..NOT.FAR_BUBBLE_ACTIVE) THEN
+      AOLD=AVR
+      COLD=CVR
+      CALL COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AOLD,COLD,CIRC_VR,QVR,QVR_NODE,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO REBUILD OLD QVR BEFORE RELOCATION'
+      STOP
+      ENDIF
+      CALL PERIODIC_CENTER_SPLINE(FID,DLM,DL(M+1),AFI,BFI,
+     &CFI,DFI,DL2,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO REBUILD OLD QREM BEFORE RELOCATION'
+      STOP
+      ENDIF
+      DO 1703 J=1,M
+      CALL PERIODIC_CENTER_EVAL(DL(J),DL2,DL(M+1),AFI,BFI,
+     &CFI,DFI,QREM_NODE(J),PSISDUM,M)
+      QOLD(J)=FID(J)+QVR(J)
+      QOLD_NODE(J)=QREM_NODE(J)+QVR_NODE(J)
+ 1703 CONTINUE
+      QREM_NODE(M+1)=QREM_NODE(1)
+      QOLD_NODE(M+1)=QREM_NODE(M+1)+QVR_NODE(M+1)
+      CALL FIND_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ANEW,CNEW,RING_DMIN_NEW,HLOCAL_NEW,RING_ETA_NEW,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'NO SAFELY SEPARATED INTERIOR VORTEX-RING POSITION',
+     &' AT T=',DTIME,' BEST ETA=',RING_ETA_NEW
+      STOP
+      ENDIF
+      AVR=ANEW
+      CVR=CNEW
+      CALL COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,CIRC_VR,QVR,QVR_NODE,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO COMPUTE NEW QVR AFTER RELOCATION'
+      STOP
+      ENDIF
+      MAX_Q_RECOMP=0.0D0
+      DO 1704 J=1,M
+      FID(J)=QOLD(J)-QVR(J)
+      QREM(J)=FID(J)
+      QTOTAL(J)=QOLD(J)
+      QREM_NODE(J)=QOLD_NODE(J)-QVR_NODE(J)
+      QERR=DABS(QOLD(J)-(QREM(J)+QVR(J)))
+      MAX_Q_RECOMP=DMAX1(MAX_Q_RECOMP,QERR)
+      QERR=DABS(QOLD_NODE(J)-(QREM_NODE(J)+QVR_NODE(J)))
+      MAX_Q_RECOMP=DMAX1(MAX_Q_RECOMP,QERR)
+ 1704 CONTINUE
+      QREM_NODE(M+1)=QOLD_NODE(M+1)-QVR_NODE(M+1)
+      QERR=DABS(QOLD_NODE(M+1)-
+     &(QREM_NODE(M+1)+QVR_NODE(M+1)))
+      MAX_Q_RECOMP=DMAX1(MAX_Q_RECOMP,QERR)
+      REMJUMP=DABS(QREM_NODE(M+1)-QREM_NODE(1))
+      CALL PERIODIC_CENTER_SPLINE(FID,DLM,DL(M+1),AFI,BFI,
+     &CFI,DFI,DL2,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO BUILD RELOCATED QREM SPLINE'
+      STOP
+      ENDIF
+      CALL MAX_VORTEX_RING_SPEED(RR,ZZ,AVR,CVR,CIRC_VR,M,
+     &MAXUVR_NEW,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO EVALUATE RELOCATED RING SPEED'
+      STOP
+      ENDIF
+      NRELOC=NRELOC+1
+      MAX_Q_RECOMP_ALL=DMAX1(MAX_Q_RECOMP_ALL,MAX_Q_RECOMP)
+      WRITE(323,1705)K,POST_STEPS,DTIME,AOLD,COLD,AVR,CVR,
+     &CIRC_VR,RING_DMIN,RING_ETA,RING_DMIN_NEW,RING_ETA_NEW,
+     &MAXUVR_OLD,MAXUVR_NEW,MAX_Q_RECOMP,REMJUMP
+      CALL FLUSH(323)
+ 1705 FORMAT(1X,I8,1X,I8,15(1X,ES20.11))
+      WRITE(*,*)'IDEAL VORTEX RING RELOCATED AT T=',DTIME
+      WRITE(*,*)'OLD A,C=',AOLD,COLD,' NEW A,C=',AVR,CVR
+      WRITE(*,*)'ETA OLD,NEW=',RING_ETA,RING_ETA_NEW,
+     &' CIRCULATION=',CIRC_VR
+      ENDIF
+      ELSE
+C     Daughter-ring fields are global.  A relocation of either ring rebases
+C     QREM on both boundaries in one transaction while both circulations stay
+C     fixed.  The following outer iteration performs the same-time BEM solve.
+      CALL BUILD_COMPONENT_CENTER_SPLINES(FID,DLM,DL,AFI,BFI,CFI,
+     &DFI,NCOMP,ISTART,IEND,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED ACCEPTED DAUGHTER QREM SPLINE'
+      STOP
+      ENDIF
+      CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVRD,CVRD,GAMMAD,NVR,NCOMP,ISTART,IEND,QVR,QVR_NODE,
+     &QVR_JUMP_COMP,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED ACCEPTED DAUGHTER QVR'
+      STOP
+      ENDIF
+      MAXVEL_MULTI=0.0D0
+      DO 2750 J=1,M
+      IC=COMP_OF_PANEL(J)
+      CALL COMPONENT_CENTER_EVAL(DL(J),IC,DLM,DL,AFI,BFI,CFI,DFI,
+     &ISTART,IEND,QREM_NODE(J),QDUM)
+      QOLD(J)=FID(J)+QVR(J)
+      QOLD_NODE(J)=QREM_NODE(J)+QVR_NODE(J)
+      SPEED=DSQRT(UCP(J)**2+VCP(J)**2)
+      MAXVEL_MULTI=DMAX1(MAXVEL_MULTI,SPEED)
+ 2750 CONTINUE
+      MAX_TOTAL_VELOCITY_RUN=DMAX1(MAX_TOTAL_VELOCITY_RUN,MAXVEL_MULTI)
+      ANY_MULTI_RELOC=.FALSE.
+      DO 2751 IVR=1,NVR
+      MOVED_RING(IVR)=.FALSE.
+      AVR_OLD_MULTI(IVR)=AVRD(IVR)
+      CVR_OLD_MULTI(IVR)=CVRD(IVR)
+      CALL COMPUTE_COMPONENT_RING_CLEARANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,AVRD(IVR),CVRD(IVR),ISTART(IVR),IEND(IVR),
+     &RDMIN_OLD_MULTI(IVR),HLOC,RETA_OLD_MULTI(IVR),JCLOSE,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED DAUGHTER RING CLEARANCE',IVR
+      STOP
+      ENDIF
+      RING_DMIN_COMP(IVR)=RDMIN_OLD_MULTI(IVR)
+      RING_ETA_COMP(IVR)=RETA_OLD_MULTI(IVR)
+      IF (RETA_OLD_MULTI(IVR).LT.1.0D0) THEN
+      CALL FIND_COMPONENT_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ISTART(IVR),IEND(IVR),AVRD(IVR),CVRD(IVR),
+     &RING_DMIN_NEW,HLOCAL_NEW,RING_ETA_NEW,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'NO SAFE DAUGHTER RING LOCATION; RING=',IVR,
+     &' TIME=',DTIME
+      STOP
+      ENDIF
+      MOVED_RING(IVR)=.TRUE.
+      ANY_MULTI_RELOC=.TRUE.
+      ENDIF
+ 2751 CONTINUE
+      DO 2752 IC=1,NCOMP
+      CALL COMPONENT_MESH_QUALITY(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ISTART(IC),IEND(IC),HMIN,HMAX,MESH_RATIO_COMP(IC),IFAIL)
+      IF (IFAIL.NE.0) STOP
+      PGASCOMP(IC)=PGAS_SPLIT*(VREFCOMP(IC)/VCOMP(IC))**POLYEXP
+ 2752 CONTINUE
+      WRITE(333,*)K,POST_STEPS,DTIME,VOLT,VCOMP(1),VCOMP(2),RATIO,
+     &DVDT_CURRENT,CCOMP(1),CCOMP(2),PGASCOMP(1),PGASCOMP(2),
+     &AVRD(1),CVRD(1),AVRD(2),CVRD(2),MAXVEL_MULTI
+      CALL FLUSH(333)
+      IF (ANY_MULTI_RELOC) THEN
+      CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVRD,CVRD,GAMMAD,NVR,NCOMP,ISTART,IEND,QVR,QVR_NODE,
+     &QVR_JUMP_COMP,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED QVR AFTER DAUGHTER RING RELOCATION'
+      STOP
+      ENDIF
+      MAX_Q_RECOMP=0.0D0
+      DO 2753 J=1,M
+      FID(J)=QOLD(J)-QVR(J)
+      QREM(J)=FID(J)
+      QTOTAL(J)=QOLD(J)
+      QREM_NODE(J)=QOLD_NODE(J)-QVR_NODE(J)
+      QERR=DABS(QOLD(J)-(FID(J)+QVR(J)))
+      MAX_Q_RECOMP=DMAX1(MAX_Q_RECOMP,QERR)
+      QERR=DABS(QOLD_NODE(J)-(QREM_NODE(J)+QVR_NODE(J)))
+      MAX_Q_RECOMP=DMAX1(MAX_Q_RECOMP,QERR)
+ 2753 CONTINUE
+      CALL BUILD_COMPONENT_CENTER_SPLINES(FID,DLM,DL,AFI,BFI,CFI,
+     &DFI,NCOMP,ISTART,IEND,IFAIL)
+      IF (IFAIL.NE.0) STOP
+      MAX_Q_RECOMP_ALL=DMAX1(MAX_Q_RECOMP_ALL,MAX_Q_RECOMP)
+      DO 2754 IVR=1,NVR
+      IF (MOVED_RING(IVR)) THEN
+      NRELOC_COMP(IVR)=NRELOC_COMP(IVR)+1
+      NRELOC=NRELOC+1
+      CALL COMPUTE_COMPONENT_RING_CLEARANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,AVRD(IVR),CVRD(IVR),ISTART(IVR),IEND(IVR),
+     &RING_DMIN_NEW,HLOCAL_NEW,RING_ETA_NEW,JCLOSE,IFAIL)
+      WRITE(331,*)K,POST_STEPS,DTIME,IVR,AVR_OLD_MULTI(IVR),
+     &CVR_OLD_MULTI(IVR),AVRD(IVR),CVRD(IVR),GAMMAD(IVR),
+     &RDMIN_OLD_MULTI(IVR),RETA_OLD_MULTI(IVR),RING_DMIN_NEW,
+     &RING_ETA_NEW,MAX_Q_RECOMP
+      ENDIF
+ 2754 CONTINUE
+      CALL FLUSH(331)
+      MULTI_REBUILD_PENDING=.TRUE.
+      ENDIF
+      ENDIF
+C=======================================================================
+C     FAR-BUBBLE EXPERIMENT: FROZEN OUT/BACK TRANSLATION (ATOMIC)
+C
+C     The bubble is FROZEN for the entire t1->t2 interval: it is
+C     translated out, held completely unevolved (no BEM solve, no
+C     Bernoulli/kinematic update is ever performed on the far state),
+C     then immediately translated back, all within this single
+C     corrected-accepted-state event.  DTIME is jumped directly from t1
+C     to t2 -- physical time passes, but the bubble does not evolve,
+C     so the interval costs no computation and cannot stall on a
+C     collapsing timestep or a far-state self-contact.
+C     This is performed only here, exactly as the ideal-filament
+C     relocation above is; the next ILS=1 pass re-solves the BEM at t2
+C     on the returned geometry.  The stationary vortex ring
+C     (AVR,CVR,CIRC_VR) is never touched at any point.
+C=======================================================================
+      IF (FAR_BUBBLE_ENABLED.AND.BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      IF (FAR_ARRIVE_T1.AND..NOT.FAR_T1_DONE) THEN
+C     --- OUT: translate away from the stationary ring/wall ---
+      CALL COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,CIRC_VR,QVR,QVR_NODE,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE: FAILED TO COMPUTE QVR BEFORE T1 MOVE'
+      STOP
+      ENDIF
+C-----------------------------------------------------------------------
+C     DIAGNOSTIC ONLY: WINDING/REMJUMP BEFORE THE OUT TRANSLATION, AND
+C     A SNAPSHOT OF THE PRE-TRANSLATION STATE FOR THE T2 ROUND-TRIP
+C     CLOSURE CHECK.  QREM_NODE IS NOT OTHERWISE POPULATED IN THIS
+C     BLOCK, SO IT IS EVALUATED HERE FROM THE CURRENT FID SPLINE (SAME
+C     PATTERN AS THE EXISTING RING-RELOCATION DIAGNOSTIC ABOVE).
+C-----------------------------------------------------------------------
+      CALL PERIODIC_CENTER_SPLINE(FID,DLM,DL(M+1),AFI,BFI,
+     &CFI,DFI,DL2,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE DIAG: FAILED TO BUILD PRE-MOVE QREM SPLINE'
+      STOP
+      ENDIF
+      DO 9111 J=1,M
+      CALL PERIODIC_CENTER_EVAL(DL(J),DL2,DL(M+1),AFI,BFI,
+     &CFI,DFI,QREM_NODE(J),PSISDUM,M)
+      FAR_ZSNAP(J)=Z(J)
+      FAR_RSNAP(J)=R(J)
+ 9111 CONTINUE
+      CALL PERIODIC_CENTER_EVAL(DL(M+1),DL2,DL(M+1),AFI,BFI,
+     &CFI,DFI,QREM_NODE(M+1),PSISDUM,M)
+      FAR_ZSNAP(M+1)=Z(M+1)
+      FAR_RSNAP(M+1)=R(M+1)
+      DO 9112 J=1,M+1
+      FAR_QREMSNAP(J)=QREM_NODE(J)
+ 9112 CONTINUE
+      FAR_WINDING_BEFORE=QVR_NODE(M+1)-QVR_NODE(1)
+      FAR_REMJUMP_BEFORE=DABS(QREM_NODE(M+1)-QREM_NODE(1))
+      WRITE(*,*)'FAR-BUBBLE DIAG (BEFORE OUT-TRANSLATION):'
+      WRITE(*,*)'  WINDING(QVR_NODE(M+1)-QVR_NODE(1))=',
+     &FAR_WINDING_BEFORE
+      WRITE(*,*)'  REMJUMP(|QREM_NODE(M+1)-QREM_NODE(1)|)=',
+     &FAR_REMJUMP_BEFORE
+      DO 9101 J=1,M
+      QOLD(J)=FID(J)+QVR(J)
+C     The bubble's physical total surface potential at t1.  It is frozen
+C     for the whole interval and is the quantity the return
+C     reconstruction must preserve against the ADVECTED ring.
+      FAR_QTOTSAVE(J)=QOLD(J)
+      FAR_QVRSAVE(J)=QVR(J)
+ 9101 CONTINUE
+C     Core radius for the ring's self-induction, measured from the
+C     untranslated t1 geometry before the bubble is moved.
+      CALL COMPUTE_RING_CLEARANCE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,FAR_RING_DMIN_T1,FAR_RING_HLOC_T1,FAR_RING_ETA_T1,
+     &FAR_JCLOSE_T1,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE: FAILED TO MEASURE RING CORE SCALE AT T1'
+      STOP
+      ENDIF
+      FAR_RING_CORE=FAR_RING_DMIN_T1
+      FAR_AVR_T1=AVR
+      FAR_CVR_T1=CVR
+      FAR_VOL_BEFORE=VOLT
+      FAR_DTIME_BEFORE=DTIME
+      DO 9102 J=1,M
+      Z(J)=Z(J)+FAR_SHIFT
+ 9102 CONTINUE
+      CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE: FAILED TO REBUILD GEOMETRY AFTER T1 MOVE'
+      STOP
+      ENDIF
+      CALL FINDVOL(DL,VOLT,M)
+      CALL FINDCEN(DL,CEN,M)
+      CALL COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,CIRC_VR,QVR,QVR_NODE,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE: FAILED TO COMPUTE QVR AFTER T1 MOVE'
+      STOP
+      ENDIF
+      FAR_MAXQERR=0.0D0
+      FAR_MAXUVR_FAR=0.0D0
+      DO 9103 J=1,M
+      FID(J)=QOLD(J)-QVR(J)
+      QREM(J)=FID(J)
+      QTOTAL(J)=QOLD(J)
+      FAR_MAXQERR=DMAX1(FAR_MAXQERR,DABS(QOLD(J)-(FID(J)+QVR(J))))
+      CALL VORTEX_RING_VELOCITY(RR(J),ZZ(J),AVR,CVR,CIRC_VR,
+     &FARUTMP,FARVTMP,IFAIL)
+      FAR_MAXUVR_FAR=DMAX1(FAR_MAXUVR_FAR,
+     &DSQRT(FARUTMP**2+FARVTMP**2))
+ 9103 CONTINUE
+C-----------------------------------------------------------------------
+C     DIAGNOSTIC ONLY: WINDING/REMJUMP AFTER THE OUT TRANSLATION AND
+C     THE FAR-POSITION QVR RECOMPUTE.  REMJUMP IS NOT MEANINGFUL UNTIL
+C     FID REFLECTS THE FAR STATE, SO BOTH QUANTITIES ARE READ HERE,
+C     IMMEDIATELY AFTER THE FID RECONSTRUCTION LOOP ABOVE, RATHER THAN
+C     SPLIT ACROSS TWO POINTS.
+C-----------------------------------------------------------------------
+      CALL PERIODIC_CENTER_SPLINE(FID,DLM,DL(M+1),AFI,BFI,
+     &CFI,DFI,DL2,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE DIAG: FAILED TO BUILD POST-MOVE QREM',
+     &' SPLINE'
+      STOP
+      ENDIF
+      DO 9113 J=1,M
+      CALL PERIODIC_CENTER_EVAL(DL(J),DL2,DL(M+1),AFI,BFI,
+     &CFI,DFI,QREM_NODE(J),PSISDUM,M)
+ 9113 CONTINUE
+      CALL PERIODIC_CENTER_EVAL(DL(M+1),DL2,DL(M+1),AFI,BFI,
+     &CFI,DFI,QREM_NODE(M+1),PSISDUM,M)
+      FAR_WINDING_AFTER=QVR_NODE(M+1)-QVR_NODE(1)
+      FAR_REMJUMP_AFTER=DABS(QREM_NODE(M+1)-QREM_NODE(1))
+      WRITE(*,*)'FAR-BUBBLE DIAG (AFTER OUT-TRANSLATION+QVR',
+     &' RECOMPUTE):'
+      WRITE(*,*)'  WINDING(QVR_NODE(M+1)-QVR_NODE(1))=',
+     &FAR_WINDING_AFTER
+      WRITE(*,*)'  REMJUMP(|QREM_NODE(M+1)-QREM_NODE(1)|)=',
+     &FAR_REMJUMP_AFTER
+      FAR_VOL_AFTER=VOLT
+      WRITE(778,*)'T1_MOVE TIME=',DTIME,' VOL_BEFORE=',
+     &FAR_VOL_BEFORE,' VOL_AFTER=',FAR_VOL_AFTER,' MAXQERR=',
+     &FAR_MAXQERR,' MAXUVR_FAR=',FAR_MAXUVR_FAR,' AVR=',AVR,
+     &' CVR=',CVR,' CIRC_VR=',CIRC_VR
+      CALL FLUSH(778)
+      WRITE(*,*)'FAR-BUBBLE: TRANSLATED OUT AT T=',DTIME,
+     &' VOL_BEFORE=',FAR_VOL_BEFORE,' VOL_AFTER=',FAR_VOL_AFTER,
+     &' MAXQERR=',FAR_MAXQERR,' MAXUVR_FAR=',FAR_MAXUVR_FAR
+      FAR_T1_DONE=.TRUE.
+      FAR_BUBBLE_ACTIVE=.TRUE.
+      FAR_ARRIVE_T1=.FALSE.
+C     --- FLOW EVOLVES WITHOUT THE BUBBLE ---
+C     The bubble is far away and frozen (no BEM solve, no Bernoulli or
+C     kinematic update touches R,Z,FID here).  The vortex ring is the
+C     only remaining object with dynamics, so it -- and it alone --
+C     is advected across the full t1->t2 span.  Circulation is
+C     conserved.  This is a two-scalar ODE and costs no BEM solves, so
+C     the interval remains computationally free.
+      DTIME=FAR_T2
+      CALL ADVECT_VORTEX_RING(AVR,CVR,CIRC_VR,FAR_RING_CORE,
+     &FAR_T2-FAR_T1,FAR_RING_NSUB,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'==========================================='
+      WRITE(*,*)'FAR-BUBBLE: RING ADVECTION FAILED, IFAIL=',IFAIL
+      WRITE(*,*)'RING AT FAILURE A,C=',AVR,CVR,' CORE=',FAR_RING_CORE
+      WRITE(*,*)'THE RING LEFT THE VALID DOMAIN (AXIS OR WALL).'
+      WRITE(*,*)'==========================================='
+      STOP
+      ENDIF
+      WRITE(*,*)'FAR-BUBBLE: RING ADVECTED OVER T1->T2'
+      WRITE(*,*)'  CORE RADIUS (=RING CLEARANCE AT T1)=',FAR_RING_CORE
+      WRITE(*,*)'  A: ',FAR_AVR_T1,' -> ',AVR
+      WRITE(*,*)'  C: ',FAR_CVR_T1,' -> ',CVR
+      WRITE(*,*)'  DELTA_A=',AVR-FAR_AVR_T1,' DELTA_C=',CVR-FAR_CVR_T1
+      WRITE(*,*)'  CIRCULATION (CONSERVED)=',CIRC_VR
+      WRITE(778,*)'RING_ADVECTION CORE=',FAR_RING_CORE,
+     &' A_T1=',FAR_AVR_T1,' C_T1=',FAR_CVR_T1,
+     &' A_T2=',AVR,' C_T2=',CVR,' CIRC=',CIRC_VR
+      CALL FLUSH(778)
+C     --- BACK: translate the still-frozen bubble back to its original
+C     position.  Its intrinsic state is unchanged, but the ring has
+C     MOVED, so the decomposition is rebuilt against the advected ring:
+C     QREM_return = QTOTAL(t1) - QVR(advected ring, returned geometry).
+C     No far-position QVR is needed here; FAR_QTOTSAVE already holds the
+C     preserved physical total from t1. ---
+      FAR_VOL_BEFORE=VOLT
+      DO 9105 J=1,M
+      Z(J)=Z(J)-FAR_SHIFT
+ 9105 CONTINUE
+      CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE: FAILED TO REBUILD GEOMETRY AFTER T2 MOVE'
+      STOP
+      ENDIF
+      CALL FINDVOL(DL,VOLT,M)
+      CALL FINDCEN(DL,CEN,M)
+      CALL COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,CIRC_VR,QVR,QVR_NODE,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE: FAILED TO COMPUTE QVR AFTER T2 MOVE'
+      STOP
+      ENDIF
+      FAR_MAXQERR=0.0D0
+      DO 9106 J=1,M
+      FID(J)=FAR_QTOTSAVE(J)-QVR(J)
+      QREM(J)=FID(J)
+      QTOTAL(J)=FAR_QTOTSAVE(J)
+C     Meaningful quantity (NOT the tautological identity check): how far
+C     the vortex potential on the returned surface shifted because the
+C     ring advected.  This equals the change forced into QREM.
+      FAR_MAXQERR=DMAX1(FAR_MAXQERR,DABS(QVR(J)-FAR_QVRSAVE(J)))
+ 9106 CONTINUE
+C-----------------------------------------------------------------------
+C     DIAGNOSTIC ONLY: THE GENUINE ROUND-TRIP CLOSURE ERRORS, COMPARING
+C     THE RETURNED STATE AGAINST THE STATE SAVED AT T1 BEFORE THE OUT
+C     TRANSLATION (FAR_ZSNAP/FAR_RSNAP/FAR_QREMSNAP).  THIS IS NOT THE
+C     SAME QUANTITY AS FAR_MAXQERR ABOVE.
+C-----------------------------------------------------------------------
+      CALL PERIODIC_CENTER_SPLINE(FID,DLM,DL(M+1),AFI,BFI,
+     &CFI,DFI,DL2,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAR-BUBBLE DIAG: FAILED TO BUILD RETURN QREM SPLINE'
+      STOP
+      ENDIF
+      FAR_ROUNDTRIP_MAXQREM=0.0D0
+      FAR_ROUNDTRIP_MAXZ=0.0D0
+      FAR_ROUNDTRIP_MAXR=0.0D0
+      DO 9114 J=1,M
+      CALL PERIODIC_CENTER_EVAL(DL(J),DL2,DL(M+1),AFI,BFI,
+     &CFI,DFI,QREM_NODE(J),PSISDUM,M)
+      FAR_ROUNDTRIP_MAXQREM=DMAX1(FAR_ROUNDTRIP_MAXQREM,
+     &DABS(QREM_NODE(J)-FAR_QREMSNAP(J)))
+      FAR_ROUNDTRIP_MAXZ=DMAX1(FAR_ROUNDTRIP_MAXZ,
+     &DABS(Z(J)-FAR_ZSNAP(J)))
+      FAR_ROUNDTRIP_MAXR=DMAX1(FAR_ROUNDTRIP_MAXR,
+     &DABS(R(J)-FAR_RSNAP(J)))
+ 9114 CONTINUE
+      CALL PERIODIC_CENTER_EVAL(DL(M+1),DL2,DL(M+1),AFI,BFI,
+     &CFI,DFI,QREM_NODE(M+1),PSISDUM,M)
+      FAR_ROUNDTRIP_MAXQREM=DMAX1(FAR_ROUNDTRIP_MAXQREM,
+     &DABS(QREM_NODE(M+1)-FAR_QREMSNAP(M+1)))
+      FAR_ROUNDTRIP_MAXZ=DMAX1(FAR_ROUNDTRIP_MAXZ,
+     &DABS(Z(M+1)-FAR_ZSNAP(M+1)))
+      FAR_ROUNDTRIP_MAXR=DMAX1(FAR_ROUNDTRIP_MAXR,
+     &DABS(R(M+1)-FAR_RSNAP(M+1)))
+      WRITE(*,*)'FAR-BUBBLE DIAG (ROUND-TRIP CLOSURE AT T2 VS T1',
+     &' BEFORE OUT-TRANSLATION):'
+      WRITE(*,*)'  MAX|QREM_return-QREM_t1|=',FAR_ROUNDTRIP_MAXQREM
+      WRITE(*,*)'  MAX|Z_return-Z_t1|=',FAR_ROUNDTRIP_MAXZ
+      WRITE(*,*)'  MAX|R_return-R_t1|=',FAR_ROUNDTRIP_MAXR
+      FAR_VOL_AFTER=VOLT
+      WRITE(778,*)'T2_MOVE TIME=',DTIME,' VOL_BEFORE=',
+     &FAR_VOL_BEFORE,' VOL_AFTER=',FAR_VOL_AFTER,' MAXQERR=',
+     &FAR_MAXQERR,' AVR=',AVR,' CVR=',CVR,' CIRC_VR=',CIRC_VR
+      CALL FLUSH(778)
+      WRITE(*,*)'FAR-BUBBLE: TRANSLATED BACK AT T=',DTIME,
+     &' VOL_BEFORE=',FAR_VOL_BEFORE,' VOL_AFTER=',FAR_VOL_AFTER
+      WRITE(*,*)'  MAX QVR SHIFT FROM RING ADVECTION=',FAR_MAXQERR
+C     The QREM decomposition is single-valued only while the ring stays
+C     linked by the bubble meridian.  Advection can move it out.
+      CALL VERIFY_VORTEX_RING_LOCATION(R,Z,M,AVR,CVR,
+     &FAR_RING_CLEAR_T2,FAR_RING_INSIDE_T2)
+      WRITE(*,*)'  RING INSIDE RETURNED BUBBLE? (1=YES)=',
+     &FAR_RING_INSIDE_T2,' CLEARANCE=',FAR_RING_CLEAR_T2
+      IF (FAR_RING_INSIDE_T2.EQ.0) THEN
+      WRITE(*,*)'  WARNING: ADVECTED RING IS OUTSIDE THE RETURNED',
+     &' BUBBLE CROSS-SECTION.  THE QREM DECOMPOSITION IS NO LONGER',
+     &' SINGLE-VALUED; SUBSEQUENT RESULTS ARE NOT TRUSTWORTHY.'
+      ENDIF
+      WRITE(778,*)'RING_AT_T2 INSIDE=',FAR_RING_INSIDE_T2,
+     &' CLEARANCE=',FAR_RING_CLEAR_T2,' MAXQVRSHIFT=',FAR_MAXQERR
+      CALL FLUSH(778)
+C     Re-arm the accepted-step bookkeeping consumed by later diagnostics
+C     (rebound/dV-dt detection, contact-approach speed) so it reflects
+C     the just-returned volume/time rather than the pre-return state.
+      VOLUME_PREV_ACCEPTED=VOLT
+      TIME_PREV_ACCEPTED=DTIME
+      FAR_T2_DONE=.TRUE.
+      FAR_BUBBLE_ACTIVE=.FALSE.
+      FAR_BUBBLE_DONE=.TRUE.
+      ENDIF
+      ENDIF
+      ENDIF
+ 6171 FORMAT(F12.5,2x,f12.5)
+>>>>>>> Stashed changes
       ENDIF
 C***********************************************************************
 CSAL      DO  703  J=M+1,MN
@@ -1200,6 +2159,2552 @@ C     WRITE(*,400)ENT1,ENT2,ENT3,ENT4
  400  FORMAT(1X,4F30.15)
       RETURN
       END
+<<<<<<< Updated upstream
+=======
+
+C=======================================================================
+C     FIRST POST-COLLAPSE VORTEX-RING / TOROIDAL-BUBBLE SUPPORT
+C=======================================================================
+      SUBROUTINE COMPUTE_VORTEX_RING_LOCATION(R,Z,M,AVR,CVR)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA)
+      AVR=0.0D0
+      CVR=0.0D0
+      DO 10 J=1,M+1
+      AVR=AVR+R(J)
+      CVR=CVR+Z(J)
+   10 CONTINUE
+      AVR=AVR/DBLE(M+1)
+      CVR=CVR/DBLE(M+1)
+      RETURN
+      END
+
+C     Confirm that (AVR,CVR) is inside the pre-impact meridional area
+C     and has nonzero clearance from its boundary.  The last-to-first
+C     segment is the symmetry-axis closure before reconnection.
+      SUBROUTINE VERIFY_VORTEX_RING_LOCATION(R,Z,M,AVR,CVR,
+     &CLEARANCE,IOK)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA)
+      LOGICAL INSIDE,TEST
+      INSIDE=.FALSE.
+      D2MIN=1.0D100
+      DO 10 J=1,M
+      CALL POINT_SEGMENT_DISTANCE2(AVR,CVR,R(J),Z(J),R(J+1),
+     &Z(J+1),D2)
+      D2MIN=DMIN1(D2MIN,D2)
+      TEST=(Z(J).GT.CVR).NEQV.(Z(J+1).GT.CVR)
+      IF (TEST) THEN
+      RCROSS=R(J)+(CVR-Z(J))*(R(J+1)-R(J))/(Z(J+1)-Z(J))
+      IF (AVR.LT.RCROSS) INSIDE=.NOT.INSIDE
+      ENDIF
+   10 CONTINUE
+      CALL POINT_SEGMENT_DISTANCE2(AVR,CVR,R(M+1),Z(M+1),R(1),
+     &Z(1),D2)
+      D2MIN=DMIN1(D2MIN,D2)
+      TEST=(Z(M+1).GT.CVR).NEQV.(Z(1).GT.CVR)
+      IF (TEST) THEN
+      RCROSS=R(M+1)+(CVR-Z(M+1))*(R(1)-R(M+1))/
+     &(Z(1)-Z(M+1))
+      IF (AVR.LT.RCROSS) INSIDE=.NOT.INSIDE
+      ENDIF
+      CLEARANCE=DSQRT(DMAX1(D2MIN,0.0D0))
+      IOK=0
+      IF (INSIDE.AND.AVR.GT.0.0D0.AND.CLEARANCE.GT.1.0D-10) IOK=1
+      RETURN
+      END
+
+C     Minimum distance from an ideal ring centreline point (ARING,CRING)
+C     to the periodic cubic toroidal meridian.  HLOCAL averages the closest
+C     panel and its two periodic neighbours, making ETA insensitive to one
+C     unusually short or long panel.
+      SUBROUTINE COMPUTE_RING_CLEARANCE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ARING,CRING,DMIN,HLOCAL,ETA,JCLOSE,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,NSEARCH=16)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      D2BEST=1.0D100
+      FBEST=0.0D0
+      JCLOSE=1
+      DO 10 J=1,M
+      DO 20 L=0,NSEARCH
+      FRAC=DBLE(L)/DBLE(NSEARCH)
+      CALL RING_SPLINE_DISTANCE2(FRAC,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D2)
+      IF (D2.LT.D2BEST) THEN
+      D2BEST=D2
+      FBEST=FRAC
+      JCLOSE=J
+      ENDIF
+   20 CONTINUE
+   10 CONTINUE
+C     Refine the sampled minimum on the closest panel by golden section.
+      DFRAC=1.0D0/DBLE(NSEARCH)
+      FLO=DMAX1(0.0D0,FBEST-DFRAC)
+      FHI=DMIN1(1.0D0,FBEST+DFRAC)
+      GOLD=0.6180339887498948482D0
+      F1=FHI-GOLD*(FHI-FLO)
+      F2=FLO+GOLD*(FHI-FLO)
+      CALL RING_SPLINE_DISTANCE2(F1,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D21)
+      CALL RING_SPLINE_DISTANCE2(F2,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D22)
+      DO 30 ITER=1,28
+      IF (D21.GT.D22) THEN
+      FLO=F1
+      F1=F2
+      D21=D22
+      F2=FLO+GOLD*(FHI-FLO)
+      CALL RING_SPLINE_DISTANCE2(F2,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D22)
+      ELSE
+      FHI=F2
+      F2=F1
+      D22=D21
+      F1=FHI-GOLD*(FHI-FLO)
+      CALL RING_SPLINE_DISTANCE2(F1,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D21)
+      ENDIF
+   30 CONTINUE
+      D2BEST=DMIN1(D2BEST,D21,D22)
+      JM=JCLOSE-1
+      IF (JM.LT.1) JM=M
+      JP=JCLOSE+1
+      IF (JP.GT.M) JP=1
+      HC=DL(JCLOSE+1)-DL(JCLOSE)
+      HM=DL(JM+1)-DL(JM)
+      HP=DL(JP+1)-DL(JP)
+      HLOCAL=(HM+HC+HP)/3.0D0
+      IFAIL=0
+      IF (D2BEST.LT.0.0D0.OR.HLOCAL.LE.1.0D-12) THEN
+      IFAIL=1
+      DMIN=0.0D0
+      ETA=0.0D0
+      RETURN
+      ENDIF
+      DMIN=DSQRT(D2BEST)
+      ETA=DMIN/HLOCAL
+      RETURN
+      END
+
+      SUBROUTINE RING_SPLINE_DISTANCE2(FRAC,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D2)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DS=FRAC*(DL(J+1)-DL(J))
+      RP=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZP=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      D2=(RP-ARING)**2+(ZP-CRING)**2
+      RETURN
+      END
+
+C     Locate the pole of maximum clearance inside the positive-r toroidal
+C     cross-section.  A candidate with ETA >= 2 is preferred whenever one
+C     exists; ETA >= 1 is the minimum safe accepted result.
+      SUBROUTINE FIND_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ANEW,CNEW,DMINNEW,HNEW,ETANEW,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,NGRID=32,NLEVEL=5)
+      DIMENSION R(NPA),Z(NPA),DL(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      LOGICAL POINT_IN_BUBBLE
+      RMIN=R(1)
+      RMAX=R(1)
+      ZMIN=Z(1)
+      ZMAX=Z(1)
+      DO 10 J=2,M
+      RMIN=DMIN1(RMIN,R(J))
+      RMAX=DMAX1(RMAX,R(J))
+      ZMIN=DMIN1(ZMIN,Z(J))
+      ZMAX=DMAX1(ZMAX,Z(J))
+   10 CONTINUE
+      RWIDTH=RMAX-RMIN
+      ZWIDTH=ZMAX-ZMIN
+      RCENTER=0.5D0*(RMIN+RMAX)
+      ZCENTER=0.5D0*(ZMIN+ZMAX)
+      DBEST=-1.0D0
+      DBESTP=-1.0D0
+      RBEST=0.0D0
+      ZBEST=0.0D0
+      RBESTP=0.0D0
+      ZBESTP=0.0D0
+      IPREFERRED=0
+      DO 40 ILEVEL=1,NLEVEL
+      IF (ILEVEL.GT.1) THEN
+      RWIDTH=0.25D0*RWIDTH
+      ZWIDTH=0.25D0*ZWIDTH
+      IF (IPREFERRED.EQ.1) THEN
+      RCENTER=RBESTP
+      ZCENTER=ZBESTP
+      ELSE
+      RCENTER=RBEST
+      ZCENTER=ZBEST
+      ENDIF
+      ENDIF
+      DO 30 IR=0,NGRID
+      RTEST=RCENTER-0.5D0*RWIDTH+
+     &RWIDTH*DBLE(IR)/DBLE(NGRID)
+      IF (RTEST.LE.0.0D0) GO TO 30
+      DO 20 IZ=0,NGRID
+      ZTEST=ZCENTER-0.5D0*ZWIDTH+
+     &ZWIDTH*DBLE(IZ)/DBLE(NGRID)
+      IF (.NOT.POINT_IN_BUBBLE(RTEST,ZTEST,R,Z,M)) GO TO 20
+      CALL COMPUTE_RING_CLEARANCE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &RTEST,ZTEST,DTEST,HTEST,ETEST,JTEST,M,IERR)
+      IF (IERR.NE.0) GO TO 20
+      IF (DTEST.GT.DBEST) THEN
+      DBEST=DTEST
+      RBEST=RTEST
+      ZBEST=ZTEST
+      ENDIF
+      IF (ETEST.GE.2.0D0.AND.DTEST.GT.DBESTP) THEN
+      DBESTP=DTEST
+      RBESTP=RTEST
+      ZBESTP=ZTEST
+      IPREFERRED=1
+      ENDIF
+   20 CONTINUE
+   30 CONTINUE
+   40 CONTINUE
+      IF (IPREFERRED.EQ.1) THEN
+      ANEW=RBESTP
+      CNEW=ZBESTP
+      ELSE
+      ANEW=RBEST
+      CNEW=ZBEST
+      ENDIF
+      IFAIL=0
+      IF (DBEST.LT.0.0D0.OR.ANEW.LE.0.0D0) THEN
+      IFAIL=1
+      DMINNEW=0.0D0
+      HNEW=0.0D0
+      ETANEW=0.0D0
+      RETURN
+      ENDIF
+      CALL VERIFY_VORTEX_RING_LOCATION(R,Z,M,ANEW,CNEW,
+     &DCHECK,IOK)
+      CALL COMPUTE_RING_CLEARANCE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ANEW,CNEW,DMINNEW,HNEW,ETANEW,JCLOSE,M,IERR)
+      IF (IOK.EQ.0.OR.IERR.NE.0.OR.ETANEW.LT.1.0D0) IFAIL=1
+      RETURN
+      END
+
+      SUBROUTINE MAX_VORTEX_RING_SPEED(RR,ZZ,A,C,CIRC,M,
+     &MAXSPEED,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DOUBLE PRECISION MAXSPEED
+      DIMENSION RR(NPA),ZZ(NPA)
+      MAXSPEED=0.0D0
+      IFAIL=0
+      DO 10 J=1,M
+      CALL VORTEX_RING_VELOCITY(RR(J),ZZ(J),A,C,CIRC,
+     &UR,UZ,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=IERR
+      RETURN
+      ENDIF
+      MAXSPEED=DMAX1(MAXSPEED,DSQRT(UR*UR+UZ*UZ))
+   10 CONTINUE
+      RETURN
+      END
+
+C     Velocity from the physical ring and its rigid-wall image.  Reflection
+C     reverses the image circulation; with this orientation UZ is zero on
+C     z=0.  This is the orientation implicit in the PDF's image notation.
+      SUBROUTINE VORTEX_RING_VELOCITY(R,Z,A,C,CIRC,UR,UZ,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      CALL VORTEX_RING_SINGLE(R,Z,A,C,CIRC,UR1,UZ1,IERR1)
+      CALL VORTEX_RING_SINGLE(R,Z,A,-C,-CIRC,UR2,UZ2,IERR2)
+      UR=UR1+UR2
+      UZ=UZ1+UZ2
+      IFAIL=MAX0(IERR1,IERR2)
+      RETURN
+      END
+
+C     Velocity of the ring's own centreline: classical thin-core
+C     self-induced axial translation (Kelvin) plus the finite velocity
+C     induced by its wall image.  The image term is evaluated with the
+C     existing ring kernel at the ring location and is non-singular
+C     there (ALPHA2=4C**2>0).  The self term is the only part that
+C     needs the core radius.
+      SUBROUTINE RING_SELF_IMAGE_VELOCITY(A,C,CIRC,CORE,UR,UZ,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (PI=3.1415926535897932384626433832795D0)
+      UR=0.0D0
+      UZ=0.0D0
+      IFAIL=0
+      IF (A.LE.1.0D-8.OR.C.LE.1.0D-8.OR.CORE.LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      ARG=8.0D0*A/CORE
+      IF (ARG.LE.1.0D0) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+      USELF=CIRC/(4.0D0*PI*A)*(DLOG(ARG)-0.25D0)
+      CALL VORTEX_RING_SINGLE(A,C,A,-C,-CIRC,URI,UZI,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=3
+      RETURN
+      ENDIF
+      UR=URI
+      UZ=USELF+UZI
+      RETURN
+      END
+
+C     RK4 advection of the ideal ring over TSPAN.  Circulation is a
+C     conserved invariant and is never modified here.
+      SUBROUTINE ADVECT_VORTEX_RING(A,C,CIRC,CORE,TSPAN,NSUB,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      IFAIL=0
+      IF (NSUB.LT.1.OR.TSPAN.LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DT=TSPAN/DBLE(NSUB)
+      DO 100 I=1,NSUB
+      CALL RING_SELF_IMAGE_VELOCITY(A,C,CIRC,CORE,AK1,CK1,IERR)
+      IF (IERR.NE.0) GO TO 900
+      CALL RING_SELF_IMAGE_VELOCITY(A+0.5D0*DT*AK1,C+0.5D0*DT*CK1,
+     &CIRC,CORE,AK2,CK2,IERR)
+      IF (IERR.NE.0) GO TO 900
+      CALL RING_SELF_IMAGE_VELOCITY(A+0.5D0*DT*AK2,C+0.5D0*DT*CK2,
+     &CIRC,CORE,AK3,CK3,IERR)
+      IF (IERR.NE.0) GO TO 900
+      CALL RING_SELF_IMAGE_VELOCITY(A+DT*AK3,C+DT*CK3,
+     &CIRC,CORE,AK4,CK4,IERR)
+      IF (IERR.NE.0) GO TO 900
+      A=A+DT*(AK1+2.0D0*AK2+2.0D0*AK3+AK4)/6.0D0
+      C=C+DT*(CK1+2.0D0*CK2+2.0D0*CK3+CK4)/6.0D0
+      IF (A.LE.1.0D-8.OR.C.LE.1.0D-8) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+  100 CONTINUE
+      RETURN
+  900 IFAIL=3
+      RETURN
+      END
+
+      SUBROUTINE VORTEX_RING_SINGLE(R,Z,A,Z0,CIRC,UR,UZ,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (PI=3.1415926535897932384626433832795D0)
+      UR=0.0D0
+      UZ=0.0D0
+      IFAIL=0
+      IF (A.LE.0.0D0.OR.R.LT.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      ZETA=Z-Z0
+      IF (R.LE.1.0D-12*A) THEN
+      DEN=(A*A+ZETA*ZETA)**1.5D0
+      IF (DEN.LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      UZ=CIRC*A*A/(2.0D0*DEN)
+      RETURN
+      ENDIF
+      ALPHA2=(R-A)**2+ZETA**2
+      BETA2=(R+A)**2+ZETA**2
+      IF (ALPHA2.LE.0.0D0.OR.BETA2.LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      EM=1.0D0-ALPHA2/BETA2
+      CALL COMPLETE_ELLIPTIC_KE(EM,EK,EE,IFAIL)
+      IF (IFAIL.NE.0) RETURN
+      BETA=DSQRT(BETA2)
+      FAC=CIRC/(2.0D0*PI*BETA)
+      UR=FAC*ZETA/R*(-EK+(A*A+R*R+ZETA*ZETA)*EE/ALPHA2)
+      UZ=FAC*(EK+(A*A-R*R-ZETA*ZETA)*EE/ALPHA2)
+      RETURN
+      END
+
+C     Complete elliptic K(m), E(m), using the same Hastings expansions as
+C     the legacy BEM kernel, but entirely in double precision and without
+C     a hidden near-filament cutoff.
+      SUBROUTINE COMPLETE_ELLIPTIC_KE(EM,EK,EE,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DATA A0,A1,A2,A3,A4 /1.3862943611198906D0,
+     &0.096663442590D0,0.035900923830D0,0.037425637130D0,
+     &0.014511962120D0/
+      DATA B0,B1,B2,B3,B4 /0.5D0,0.124985935970D0,
+     &0.068802485760D0,0.033283553460D0,0.004417870120D0/
+      DATA C1,C2,C3,C4 /0.443251414630D0,0.062606012200D0,
+     &0.047573835460D0,0.017365064510D0/
+      DATA D1,D2,D3,D4 /0.249983683100D0,0.092001800370D0,
+     &0.040696975260D0,0.005264496390D0/
+      IFAIL=0
+      ETA=1.0D0-EM
+      IF (EM.LT.0.0D0.OR.EM.GE.1.0D0.OR.ETA.LE.0.0D0) THEN
+      IFAIL=1
+      EK=0.0D0
+      EE=0.0D0
+      RETURN
+      ENDIF
+      P=A0+ETA*(A1+ETA*(A2+ETA*(A3+A4*ETA)))
+      Q=B0+ETA*(B1+ETA*(B2+ETA*(B3+B4*ETA)))
+      RR=1.0D0+ETA*(C1+ETA*(C2+ETA*(C3+C4*ETA)))
+      SS=ETA*(D1+ETA*(D2+ETA*(D3+D4*ETA)))
+      EK=P-Q*DLOG(ETA)
+      EE=RR-SS*DLOG(ETA)
+      RETURN
+      END
+
+C     QVR is initialized by the analytic axial integral from minus infinity,
+C     followed by a radial path to node 1.  It is then propagated over the
+C     current cubic meridian by integrating v_vr dot dl on every panel.
+      SUBROUTINE COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &A,C,CIRC,QVR,QVRN,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION QVR(NPA),QVRN(NPA)
+      R1=AR(1)
+      Z1=AZ(1)
+      CALL VR_AXIS_POTENTIAL(Z1,A,C,CIRC,PHIREF)
+      CALL VR_STRAIGHT_INTEGRAL(0.0D0,Z1,R1,Z1,A,C,CIRC,
+     &PHIRAD,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=IERR
+      RETURN
+      ENDIF
+      QVRN(1)=PHIREF+PHIRAD
+      DO 10 J=1,M
+      SMID=0.5D0*(DL(J)+DL(J+1))
+      CALL VR_SPLINE_LINE_INTEGRAL(DL(J),SMID,J,DL,AR,BR,CR,
+     &DR,AZ,BZ,CZ,DZ,A,C,CIRC,DPHI1,IERR1)
+      CALL VR_SPLINE_LINE_INTEGRAL(SMID,DL(J+1),J,DL,AR,BR,CR,
+     &DR,AZ,BZ,CZ,DZ,A,C,CIRC,DPHI2,IERR2)
+      IF (IERR1.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      QVR(J)=QVRN(J)+DPHI1
+      QVRN(J+1)=QVR(J)+DPHI2
+   10 CONTINUE
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE FIND_COMPONENT_SELF_DISTANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,JS,JE,DMIN,JAG,JBG,FA,FB,RA,ZA,RB,ZB,
+     &HLOCAL,IINTERSECT,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION XL(NPA),ARL(NPA),BRL(NPA),CRL(NPA),DRL(NPA)
+      DIMENSION AZL(NPA),BZL(NPA),CZL(NPA),DZL(NPA)
+      NC=JE-JS+1
+      X0=DL(JS)
+      DO 10 K=1,NC
+      J=JS+K-1
+      XL(K)=DL(J)-X0
+      ARL(K)=AR(J)
+      BRL(K)=BR(J)
+      CRL(K)=CR(J)
+      DRL(K)=DR(J)
+      AZL(K)=AZ(J)
+      BZL(K)=BZ(J)
+      CZL(K)=CZ(J)
+      DZL(K)=DZ(J)
+   10 CONTINUE
+      XL(NC+1)=DL(JE+1)-X0
+      CALL FIND_MIN_NONNEIGHBOR_SPLINE_DISTANCE(XL,ARL,BRL,CRL,DRL,
+     &AZL,BZL,CZL,DZL,DMIN,JA,JB,FA,FB,RA,ZA,RB,ZB,HLOCAL,
+     &IINTERSECT,NC,IFAIL)
+      JAG=JS+JA-1
+      JBG=JS+JB-1
+      RETURN
+      END
+
+      SUBROUTINE VR_AXIS_POTENTIAL(Z,A,C,CIRC,PHI)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      X1=Z-C
+      X2=Z+C
+      PHI=0.5D0*CIRC*(1.0D0+X1/DSQRT(A*A+X1*X1))
+     &-0.5D0*CIRC*(1.0D0+X2/DSQRT(A*A+X2*X2))
+      RETURN
+      END
+
+      SUBROUTINE VR_STRAIGHT_INTEGRAL(R1,Z1,R2,Z2,A,C,CIRC,
+     &VALUE,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DIMENSION GX(16),GW(16)
+      DATA GX /-0.9894009349916499D0,-0.9445750230732326D0,
+     &-0.8656312023878318D0,-0.7554044083550030D0,
+     &-0.6178762444026438D0,-0.4580167776572274D0,
+     &-0.2816035507792589D0,-0.0950125098376374D0,
+     & 0.0950125098376374D0, 0.2816035507792589D0,
+     & 0.4580167776572274D0, 0.6178762444026438D0,
+     & 0.7554044083550030D0, 0.8656312023878318D0,
+     & 0.9445750230732326D0, 0.9894009349916499D0/
+      DATA GW /0.0271524594117541D0,0.0622535239386479D0,
+     &0.0951585116824928D0,0.1246289712555339D0,
+     &0.1495959888165767D0,0.1691565193950025D0,
+     &0.1826034150449236D0,0.1894506104550685D0,
+     &0.1894506104550685D0,0.1826034150449236D0,
+     &0.1691565193950025D0,0.1495959888165767D0,
+     &0.1246289712555339D0,0.0951585116824928D0,
+     &0.0622535239386479D0,0.0271524594117541D0/
+      VALUE=0.0D0
+      DRL=R2-R1
+      DZL=Z2-Z1
+      DO 10 L=1,16
+      T=0.5D0*(GX(L)+1.0D0)
+      R=R1+T*DRL
+      Z=Z1+T*DZL
+      CALL VORTEX_RING_VELOCITY(R,Z,A,C,CIRC,UR,UZ,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=IERR
+      RETURN
+      ENDIF
+      VALUE=VALUE+GW(L)*(UR*DRL+UZ*DZL)
+   10 CONTINUE
+      VALUE=0.5D0*VALUE
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE VR_SPLINE_LINE_INTEGRAL(S1,S2,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,A,C,CIRC,VALUE,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION GX(16),GW(16)
+      DATA GX /-0.9894009349916499D0,-0.9445750230732326D0,
+     &-0.8656312023878318D0,-0.7554044083550030D0,
+     &-0.6178762444026438D0,-0.4580167776572274D0,
+     &-0.2816035507792589D0,-0.0950125098376374D0,
+     & 0.0950125098376374D0, 0.2816035507792589D0,
+     & 0.4580167776572274D0, 0.6178762444026438D0,
+     & 0.7554044083550030D0, 0.8656312023878318D0,
+     & 0.9445750230732326D0, 0.9894009349916499D0/
+      DATA GW /0.0271524594117541D0,0.0622535239386479D0,
+     &0.0951585116824928D0,0.1246289712555339D0,
+     &0.1495959888165767D0,0.1691565193950025D0,
+     &0.1826034150449236D0,0.1894506104550685D0,
+     &0.1894506104550685D0,0.1826034150449236D0,
+     &0.1691565193950025D0,0.1495959888165767D0,
+     &0.1246289712555339D0,0.0951585116824928D0,
+     &0.0622535239386479D0,0.0271524594117541D0/
+      VALUE=0.0D0
+      DO 10 L=1,16
+      S=0.5D0*((S2-S1)*GX(L)+S2+S1)
+      DS=S-DL(J)
+      R=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      Z=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      DRDS=BR(J)+2.0D0*CR(J)*DS+3.0D0*DR(J)*DS**2
+      DZDS=BZ(J)+2.0D0*CZ(J)*DS+3.0D0*DZ(J)*DS**2
+      CALL VORTEX_RING_VELOCITY(R,Z,A,C,CIRC,UR,UZ,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=IERR
+      RETURN
+      ENDIF
+      VALUE=VALUE+GW(L)*(UR*DRDS+UZ*DZDS)
+   10 CONTINUE
+      VALUE=0.5D0*(S2-S1)*VALUE
+      IFAIL=0
+      RETURN
+      END
+
+C=======================================================================
+C     DISCONNECTED PERIODIC DAUGHTER CONTOURS
+C
+C     The BEM still sees one flat list of M bubble panels.  ISTART/IEND
+C     identify independent periodic components.  No panel is inserted
+C     between IEND(IC) and ISTART(IC+1); each IEND panel is constructed as
+C     the physical closing panel back to ISTART of the same component.
+C=======================================================================
+      SUBROUTINE VORTEX_RINGS_VELOCITY(R,Z,AVR,CVR,GAMMA,NVR,
+     &UR,UZ,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (MAXVR=2)
+      DIMENSION AVR(MAXVR),CVR(MAXVR),GAMMA(MAXVR)
+      UR=0.0D0
+      UZ=0.0D0
+      IFAIL=0
+      DO 10 IVR=1,NVR
+      CALL VORTEX_RING_VELOCITY(R,Z,AVR(IVR),CVR(IVR),GAMMA(IVR),
+     &UR1,UZ1,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=IERR
+      RETURN
+      ENDIF
+      UR=UR+UR1
+      UZ=UZ+UZ1
+   10 CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2)
+      DIMENSION R(NPA),Z(NPA),DL(NPA),DLM(NPA),RR(NPA),ZZ(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION ISTART(MAXCOMP),IEND(MAXCOMP)
+      DIMENSION RL(NPA),ZL(NPA),XL(NPA),ARL(NPA),BRL(NPA)
+      DIMENSION CRL(NPA),DRL(NPA),AZL(NPA),BZL(NPA),CZL(NPA)
+      DIMENSION DZL(NPA),ARCL(NPA)
+      OFFSET=0.0D0
+      IFAIL=0
+      DO 100 IC=1,NCOMP
+      JS=ISTART(IC)
+      JE=IEND(IC)
+      NC=JE-JS+1
+      IF (NC.LT.4) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 10 K=1,NC
+      J=JS+K-1
+      RL(K)=R(J)
+      ZL(K)=Z(J)
+   10 CONTINUE
+      RL(NC+1)=RL(1)
+      ZL(NC+1)=ZL(1)
+      XL(1)=0.0D0
+      DO 20 K=2,NC+1
+      H=DSQRT((RL(K)-RL(K-1))**2+(ZL(K)-ZL(K-1))**2)
+      IF (H.LE.1.0D-12) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+      XL(K)=XL(K-1)+H
+   20 CONTINUE
+      DO 50 ITER=1,4
+      CALL PERIODIC_SPLINE_NODES(RL,XL,ARL,BRL,CRL,DRL,NC,IERR1)
+      CALL PERIODIC_SPLINE_NODES(ZL,XL,AZL,BZL,CZL,DZL,NC,IERR2)
+      IF (IERR1.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=3
+      RETURN
+      ENDIF
+      CALL TOROIDAL_ARCL(XL,ARL,BRL,CRL,DRL,AZL,BZL,CZL,DZL,
+     &ARCL,NC)
+      XL(1)=0.0D0
+      DO 40 K=2,NC+1
+      IF (ARCL(K-1).LE.1.0D-12) THEN
+      IFAIL=4
+      RETURN
+      ENDIF
+      XL(K)=XL(K-1)+ARCL(K-1)
+   40 CONTINUE
+   50 CONTINUE
+      CALL PERIODIC_SPLINE_NODES(RL,XL,ARL,BRL,CRL,DRL,NC,IERR1)
+      CALL PERIODIC_SPLINE_NODES(ZL,XL,AZL,BZL,CZL,DZL,NC,IERR2)
+      IF (IERR1.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=5
+      RETURN
+      ENDIF
+      DO 60 K=1,NC
+      J=JS+K-1
+      DL(J)=OFFSET+XL(K)
+      DLM(J)=OFFSET+0.5D0*(XL(K)+XL(K+1))
+      AR(J)=ARL(K)
+      BR(J)=BRL(K)
+      CR(J)=CRL(K)
+      DR(J)=DRL(K)
+      AZ(J)=AZL(K)
+      BZ(J)=BZL(K)
+      CZ(J)=CZL(K)
+      DZ(J)=DZL(K)
+      DS=0.5D0*(XL(K+1)-XL(K))
+      RR(J)=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZZ(J)=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      IF (RR(J).LE.0.0D0.OR.ZZ(J).LE.0.0D0) THEN
+      IFAIL=6
+      RETURN
+      ENDIF
+   60 CONTINUE
+      OFFSET=OFFSET+XL(NC+1)
+      DL(JE+1)=OFFSET
+  100 CONTINUE
+      IF (IEND(NCOMP).NE.M) THEN
+      IFAIL=7
+      RETURN
+      ENDIF
+C     Compatibility copy only.  It is not a physical connector panel.
+      R(M+1)=R(1)
+      Z(M+1)=Z(1)
+      RETURN
+      END
+
+      SUBROUTINE BUILD_COMPONENT_CENTER_SPLINES(Y,DLM,DL,A,B,C,D,
+     &NCOMP,ISTART,IEND,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2)
+      DIMENSION Y(NPA),DLM(NPA),DL(NPA),A(NPA),B(NPA),C(NPA),D(NPA)
+      DIMENSION ISTART(MAXCOMP),IEND(MAXCOMP)
+      DIMENSION YL(NPA),XL(NPA),AL(NPA),BL(NPA),CL(NPA),DCL(NPA)
+      IFAIL=0
+      DO 30 IC=1,NCOMP
+      JS=ISTART(IC)
+      JE=IEND(IC)
+      NC=JE-JS+1
+      PERIOD=DL(JE+1)-DL(JS)
+      DO 10 K=1,NC
+      J=JS+K-1
+      YL(K)=Y(J)
+      XL(K)=DLM(J)-DL(JS)
+   10 CONTINUE
+      XL(NC+1)=XL(1)+PERIOD
+      YL(NC+1)=YL(1)
+      CALL PERIODIC_SPLINE_NODES(YL,XL,AL,BL,CL,DCL,NC,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 20 K=1,NC
+      J=JS+K-1
+      A(J)=AL(K)
+      B(J)=BL(K)
+      C(J)=CL(K)
+      D(J)=DCL(K)
+   20 CONTINUE
+   30 CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE COMPONENT_CENTER_EVAL(SIN,IC,DLM,DL,A,B,C,D,
+     &ISTART,IEND,VALUE,DERIV)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2)
+      DIMENSION DLM(NPA),DL(NPA),A(NPA),B(NPA),C(NPA),D(NPA)
+      DIMENSION ISTART(MAXCOMP),IEND(MAXCOMP)
+      JS=ISTART(IC)
+      JE=IEND(IC)
+      PERIOD=DL(JE+1)-DL(JS)
+      S=SIN
+   10 IF (S.LT.DLM(JS)) THEN
+      S=S+PERIOD
+      GO TO 10
+      ENDIF
+   20 IF (S.GE.DLM(JS)+PERIOD) THEN
+      S=S-PERIOD
+      GO TO 20
+      ENDIF
+      JP=JE
+      DO 30 J=JS,JE-1
+      IF (S.GE.DLM(J).AND.S.LT.DLM(J+1)) THEN
+      JP=J
+      GO TO 40
+      ENDIF
+   30 CONTINUE
+   40 DS=S-DLM(JP)
+      VALUE=A(JP)+B(JP)*DS+C(JP)*DS**2+D(JP)*DS**3
+      DERIV=B(JP)+2.0D0*C(JP)*DS+3.0D0*D(JP)*DS**2
+      RETURN
+      END
+
+      SUBROUTINE BUILD_COMPONENT_NODE_FIELD_TO_CENTERS(YNODE,DL,DLM,
+     &Y,A,B,C,D,NCOMP,ISTART,IEND,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2)
+      DIMENSION YNODE(NPA),DL(NPA),DLM(NPA),Y(NPA)
+      DIMENSION A(NPA),B(NPA),C(NPA),D(NPA)
+      DIMENSION ISTART(MAXCOMP),IEND(MAXCOMP)
+      DIMENSION YL(NPA),XL(NPA),AL(NPA),BL(NPA),CL(NPA),DCL(NPA)
+      IFAIL=0
+      DO 40 IC=1,NCOMP
+      JS=ISTART(IC)
+      JE=IEND(IC)
+      NC=JE-JS+1
+      DO 10 K=1,NC
+      J=JS+K-1
+      YL(K)=YNODE(J)
+      XL(K)=DL(J)-DL(JS)
+   10 CONTINUE
+      YL(NC+1)=YL(1)
+      XL(NC+1)=DL(JE+1)-DL(JS)
+      CALL PERIODIC_SPLINE_NODES(YL,XL,AL,BL,CL,DCL,NC,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 20 K=1,NC
+      J=JS+K-1
+      A(J)=AL(K)
+      B(J)=BL(K)
+      C(J)=CL(K)
+      D(J)=DCL(K)
+      DS=DLM(J)-DL(J)
+      Y(J)=A(J)+B(J)*DS+C(J)*DS**2+D(J)*DS**3
+   20 CONTINUE
+   40 CONTINUE
+      RETURN
+      END
+
+C     Sum the spatial potentials of all active rings on every daughter.
+C     QVRJUMP(IC) is the unwrapped potential increment around component IC.
+      SUBROUTINE COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVR,CVR,GAMMA,NVR,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2,MAXVR=2)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AVR(MAXVR),CVR(MAXVR),GAMMA(MAXVR)
+      DIMENSION ISTART(MAXCOMP),IEND(MAXCOMP),QVR(NPA),QVRN(NPA)
+      DIMENSION QVRJUMP(MAXCOMP)
+      DO 5 J=1,M
+      QVR(J)=0.0D0
+      QVRN(J)=0.0D0
+    5 CONTINUE
+      DO 6 IC=1,NCOMP
+      QVRJUMP(IC)=0.0D0
+    6 CONTINUE
+      IFAIL=0
+      QOFFSET=0.0D0
+      DO 50 IC=1,NCOMP
+      JS=ISTART(IC)
+      JE=IEND(IC)
+      R1=AR(JS)
+      Z1=AZ(JS)
+      DO 40 IVR=1,NVR
+      CALL VR_AXIS_POTENTIAL(Z1,AVR(IVR),CVR(IVR),GAMMA(IVR),
+     &PHIREF)
+      CALL VR_STRAIGHT_INTEGRAL(0.0D0,Z1,R1,Z1,AVR(IVR),CVR(IVR),
+     &GAMMA(IVR),PHIRAD,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      QSTART=PHIREF+PHIRAD
+      QCUR=QSTART
+      QVRN(JS)=QVRN(JS)+QCUR
+      DO 30 J=JS,JE
+      SMID=DLMID(DL(J),DL(J+1))
+      CALL VR_SPLINE_LINE_INTEGRAL(DL(J),SMID,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,AVR(IVR),CVR(IVR),GAMMA(IVR),DPHI1,IERR1)
+      CALL VR_SPLINE_LINE_INTEGRAL(SMID,DL(J+1),J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,AVR(IVR),CVR(IVR),GAMMA(IVR),DPHI2,IERR2)
+      IF (IERR1.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+      QVR(J)=QVR(J)+QCUR+DPHI1
+      QCUR=QCUR+DPHI1+DPHI2
+      IF (J.LT.JE) QVRN(J+1)=QVRN(J+1)+QCUR
+   30 CONTINUE
+      QVRJUMP(IC)=QVRJUMP(IC)+QCUR-QSTART
+   40 CONTINUE
+C     Choose one globally consistent sheet of the multivalued ring potential.
+C     Daughter IC starts after all preceding clockwise daughter windings.
+C     This additive constant does not alter velocity, but it is essential for
+C     QREM to be continuous through the liquid gap between components.
+      DO 45 J=JS,JE
+      QVR(J)=QVR(J)+QOFFSET
+      QVRN(J)=QVRN(J)+QOFFSET
+   45 CONTINUE
+      QOFFSET=QOFFSET+GAMMA(IC)
+   50 CONTINUE
+      QVRN(M+1)=QVRN(1)
+      RETURN
+      END
+
+      DOUBLE PRECISION FUNCTION DLMID(A,B)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      DLMID=0.5D0*(A+B)
+      RETURN
+      END
+
+      SUBROUTINE FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,
+     &CCOMP,VOLT,CENTROID,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2)
+      DIMENSION DL(NPA),ISTART(MAXCOMP),IEND(MAXCOMP)
+      DIMENSION VCOMP(MAXCOMP),CCOMP(MAXCOMP)
+      DOUBLE PRECISION MC,MT
+      VT=0.0D0
+      MT=0.0D0
+      AT=0.0D0
+      IFAIL=0
+      DO 20 IC=1,NCOMP
+      VCOMP(IC)=0.0D0
+      MC=0.0D0
+      AC=0.0D0
+      DO 10 J=ISTART(IC),IEND(IC)
+      CALL VOLGAUS(DL,DV,J)
+      CALL CENGAUS(DL,DM,DA,J)
+      VCOMP(IC)=VCOMP(IC)+DV
+      MC=MC+DM
+      AC=AC+DA
+   10 CONTINUE
+      IF (VCOMP(IC).LE.0.0D0.OR.DABS(AC).LE.1.0D-20) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      CCOMP(IC)=MC/AC
+      VT=VT+VCOMP(IC)
+      MT=MT+MC
+      AT=AT+AC
+   20 CONTINUE
+      IF (VT.LE.0.0D0.OR.DABS(AT).LE.1.0D-20) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+      VOLT=VT
+      CENTROID=MT/AT
+      RETURN
+      END
+
+      SUBROUTINE COMPONENT_MESH_QUALITY(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &JS,JE,HMIN,HMAX,RATIO,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      HMIN=1.0D100
+      HMAX=0.0D0
+      DO 10 J=JS,JE
+      CALL TOROIDAL_PARTIAL_ARCL(1.0D0,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,H)
+      IF (H.LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      HMIN=DMIN1(HMIN,H)
+      HMAX=DMAX1(HMAX,H)
+   10 CONTINUE
+      RATIO=HMAX/HMIN
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE REDISTRIBUTE_DAUGHTER_COMPONENT_NODES(R,Z,QNODE,
+     &DL,DLM,AR,BR,CR,DR,AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,
+     &IC,ISTART,IEND,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2)
+      DIMENSION R(NPA),Z(NPA),QNODE(NPA),DL(NPA),DLM(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AFI(NPA),BFI(NPA),CFI(NPA),DFI(NPA)
+      DIMENSION ISTART(MAXCOMP),IEND(MAXCOMP),ARCL(NPA)
+      DIMENSION RNEW(NPA),ZNEW(NPA),QNEW(NPA)
+      DOUBLE PRECISION LOCAL
+      JS=ISTART(IC)
+      JE=IEND(IC)
+      NC=JE-JS+1
+      TOTAL=0.0D0
+      DO 10 J=JS,JE
+      CALL TOROIDAL_PARTIAL_ARCL(1.0D0,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARCL(J))
+      IF (ARCL(J).LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      TOTAL=TOTAL+ARCL(J)
+   10 CONTINUE
+      DO 40 K=1,NC
+      TARGET=TOTAL*DBLE(K-1)/DBLE(NC)
+      CUM=0.0D0
+      JP=JE
+      DO 20 J=JS,JE
+      IF (TARGET.LT.CUM+ARCL(J).OR.J.EQ.JE) THEN
+      JP=J
+      GO TO 25
+      ENDIF
+      CUM=CUM+ARCL(J)
+   20 CONTINUE
+   25 LOCAL=TARGET-CUM
+      FLO=0.0D0
+      FHI=1.0D0
+      DO 30 ITER=1,38
+      F=0.5D0*(FLO+FHI)
+      CALL TOROIDAL_PARTIAL_ARCL(F,JP,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,PART)
+      IF (PART.LT.LOCAL) THEN
+      FLO=F
+      ELSE
+      FHI=F
+      ENDIF
+   30 CONTINUE
+      F=0.5D0*(FLO+FHI)
+      S=DL(JP)+F*(DL(JP+1)-DL(JP))
+      DS=S-DL(JP)
+      RNEW(K)=AR(JP)+BR(JP)*DS+CR(JP)*DS**2+DR(JP)*DS**3
+      ZNEW(K)=AZ(JP)+BZ(JP)*DS+CZ(JP)*DS**2+DZ(JP)*DS**3
+      CALL COMPONENT_CENTER_EVAL(S,IC,DLM,DL,AFI,BFI,CFI,DFI,
+     &ISTART,IEND,QNEW(K),QDUM)
+   40 CONTINUE
+      DO 50 K=1,NC
+      J=JS+K-1
+      R(J)=RNEW(K)
+      Z(J)=ZNEW(K)
+      QNODE(J)=QNEW(K)
+   50 CONTINUE
+      IFAIL=0
+      RETURN
+      END
+
+      LOGICAL FUNCTION POINT_IN_COMPONENT(RP,ZP,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,JS,JE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,NS=12)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      LOGICAL INSIDE,TEST
+      INSIDE=.FALSE.
+      RPREV=AR(JS)
+      ZPREV=AZ(JS)
+      DO 20 J=JS,JE
+      DO 10 L=1,NS
+      F=DBLE(L)/DBLE(NS)
+      DS=F*(DL(J+1)-DL(J))
+      RNEXT=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZNEXT=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      TEST=(ZPREV.GT.ZP).NEQV.(ZNEXT.GT.ZP)
+      IF (TEST) THEN
+      RCROSS=RPREV+(ZP-ZPREV)*(RNEXT-RPREV)/(ZNEXT-ZPREV)
+      IF (RP.LT.RCROSS) INSIDE=.NOT.INSIDE
+      ENDIF
+      RPREV=RNEXT
+      ZPREV=ZNEXT
+   10 CONTINUE
+   20 CONTINUE
+      POINT_IN_COMPONENT=INSIDE
+      RETURN
+      END
+
+      SUBROUTINE COMPUTE_COMPONENT_RING_CLEARANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,JS,JE,DMIN,HLOCAL,ETA,JCLOSE,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,NSEARCH=16)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      D2BEST=1.0D100
+      JCLOSE=JS
+      FBEST=0.0D0
+      DO 20 J=JS,JE
+      DO 10 L=0,NSEARCH
+      F=DBLE(L)/DBLE(NSEARCH)
+      CALL RING_SPLINE_DISTANCE2(F,J,DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ARING,CRING,D2)
+      IF (D2.LT.D2BEST) THEN
+      D2BEST=D2
+      JCLOSE=J
+      FBEST=F
+      ENDIF
+   10 CONTINUE
+   20 CONTINUE
+      DF=1.0D0/DBLE(NSEARCH)
+      FLO=DMAX1(0.0D0,FBEST-DF)
+      FHI=DMIN1(1.0D0,FBEST+DF)
+      GOLD=0.6180339887498948482D0
+      F1=FHI-GOLD*(FHI-FLO)
+      F2=FLO+GOLD*(FHI-FLO)
+      CALL RING_SPLINE_DISTANCE2(F1,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D21)
+      CALL RING_SPLINE_DISTANCE2(F2,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D22)
+      DO 30 ITER=1,30
+      IF (D21.GT.D22) THEN
+      FLO=F1
+      F1=F2
+      D21=D22
+      F2=FLO+GOLD*(FHI-FLO)
+      CALL RING_SPLINE_DISTANCE2(F2,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D22)
+      ELSE
+      FHI=F2
+      F2=F1
+      D22=D21
+      F1=FHI-GOLD*(FHI-FLO)
+      CALL RING_SPLINE_DISTANCE2(F1,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ARING,CRING,D21)
+      ENDIF
+   30 CONTINUE
+      D2BEST=DMIN1(D2BEST,D21,D22)
+      JM=JCLOSE-1
+      IF (JM.LT.JS) JM=JE
+      JP=JCLOSE+1
+      IF (JP.GT.JE) JP=JS
+      CALL TOROIDAL_PARTIAL_ARCL(1.0D0,JM,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,HM)
+      CALL TOROIDAL_PARTIAL_ARCL(1.0D0,JCLOSE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,HC)
+      CALL TOROIDAL_PARTIAL_ARCL(1.0D0,JP,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,HP)
+      HLOCAL=(HM+HC+HP)/3.0D0
+      IF (D2BEST.LT.0.0D0.OR.HLOCAL.LE.1.0D-12) THEN
+      IFAIL=1
+      DMIN=0.0D0
+      ETA=0.0D0
+      RETURN
+      ENDIF
+      DMIN=DSQRT(D2BEST)
+      ETA=DMIN/HLOCAL
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE FIND_COMPONENT_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,JS,JE,ANEW,CNEW,DMINNEW,HNEW,ETANEW,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,NGRID=32,NLEVEL=5)
+      DIMENSION R(NPA),Z(NPA),DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      LOGICAL POINT_IN_COMPONENT
+      RMIN=R(JS)
+      RMAX=R(JS)
+      ZMIN=Z(JS)
+      ZMAX=Z(JS)
+      DO 10 J=JS+1,JE
+      RMIN=DMIN1(RMIN,R(J))
+      RMAX=DMAX1(RMAX,R(J))
+      ZMIN=DMIN1(ZMIN,Z(J))
+      ZMAX=DMAX1(ZMAX,Z(J))
+   10 CONTINUE
+      RWIDTH=RMAX-RMIN
+      ZWIDTH=ZMAX-ZMIN
+      RCENTER=0.5D0*(RMIN+RMAX)
+      ZCENTER=0.5D0*(ZMIN+ZMAX)
+      DBEST=-1.0D0
+      DBESTP=-1.0D0
+      IPREFERRED=0
+      DO 50 ILEVEL=1,NLEVEL
+      IF (ILEVEL.GT.1) THEN
+      RWIDTH=0.25D0*RWIDTH
+      ZWIDTH=0.25D0*ZWIDTH
+      IF (IPREFERRED.EQ.1) THEN
+      RCENTER=RBESTP
+      ZCENTER=ZBESTP
+      ELSE
+      RCENTER=RBEST
+      ZCENTER=ZBEST
+      ENDIF
+      ENDIF
+      DO 40 IR=0,NGRID
+      RT=RCENTER-0.5D0*RWIDTH+RWIDTH*DBLE(IR)/DBLE(NGRID)
+      IF (RT.LE.0.0D0) GO TO 40
+      DO 30 IZ=0,NGRID
+      ZT=ZCENTER-0.5D0*ZWIDTH+ZWIDTH*DBLE(IZ)/DBLE(NGRID)
+      IF (.NOT.POINT_IN_COMPONENT(RT,ZT,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,JS,JE)) GO TO 30
+      CALL COMPUTE_COMPONENT_RING_CLEARANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RT,ZT,JS,JE,DT,HT,ET,JT,IERR)
+      IF (IERR.NE.0) GO TO 30
+      IF (DT.GT.DBEST) THEN
+      DBEST=DT
+      RBEST=RT
+      ZBEST=ZT
+      ENDIF
+      IF (ET.GE.2.0D0.AND.DT.GT.DBESTP) THEN
+      DBESTP=DT
+      RBESTP=RT
+      ZBESTP=ZT
+      IPREFERRED=1
+      ENDIF
+   30 CONTINUE
+   40 CONTINUE
+   50 CONTINUE
+      IF (IPREFERRED.EQ.1) THEN
+      ANEW=RBESTP
+      CNEW=ZBESTP
+      ELSE
+      ANEW=RBEST
+      CNEW=ZBEST
+      ENDIF
+      IF (DBEST.LT.0.0D0.OR.ANEW.LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      CALL COMPUTE_COMPONENT_RING_CLEARANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ANEW,CNEW,JS,JE,DMINNEW,HNEW,ETANEW,JC,IERR)
+      IFAIL=0
+      IF (IERR.NE.0.OR.ETANEW.LT.1.0D0) IFAIL=2
+      RETURN
+      END
+
+      SUBROUTINE EVALUATE_PARENT_UNWRAPPED(SU,PERIOD,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,AQ,BQ,CQ,DQ,QVRN,AVR,CVR,GAMMA,
+     &RP,ZP,QOLD,IFAIL,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AQ(NPA),BQ(NPA),CQ(NPA),DQ(NPA),QVRN(NPA)
+      S=SU
+      IWRAP=0
+   10 IF (S.GE.PERIOD) THEN
+      S=S-PERIOD
+      IWRAP=IWRAP+1
+      GO TO 10
+      ENDIF
+   20 IF (S.LT.0.0D0) THEN
+      S=S+PERIOD
+      IWRAP=IWRAP-1
+      GO TO 20
+      ENDIF
+      JP=M
+      DO 30 J=1,M
+      IF (S.GE.DL(J).AND.S.LT.DL(J+1)) THEN
+      JP=J
+      GO TO 40
+      ENDIF
+   30 CONTINUE
+   40 DS=S-DL(JP)
+      RP=AR(JP)+BR(JP)*DS+CR(JP)*DS**2+DR(JP)*DS**3
+      ZP=AZ(JP)+BZ(JP)*DS+CZ(JP)*DS**2+DZ(JP)*DS**3
+      QREM=AQ(JP)+BQ(JP)*DS+CQ(JP)*DS**2+DQ(JP)*DS**3
+      DPHI=0.0D0
+      IF (DS.GT.1.0D-15) CALL VR_SPLINE_LINE_INTEGRAL(DL(JP),S,
+     &JP,DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,AVR,CVR,GAMMA,DPHI,IERR)
+      IF (DS.LE.1.0D-15) IERR=0
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      QOLD=QREM+QVRN(JP)+DPHI+DBLE(IWRAP)*GAMMA
+      IFAIL=0
+      RETURN
+      END
+
+C     Load the immutable validated checkpoint and perform the second split.
+C     The two daughter loops are independently resampled; their panels are
+C     then packed into the one globally coupled BEM source list.
+      SUBROUTINE INITIALIZE_DAUGHTER_SPLIT(FILENAME,R,Z,RR,ZZ,FID,PSI,
+     &DL,DLM,AR,BR,CR,DR,AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,
+     &QVR,QVRN,QREM,QREMN,QTOTAL,MOLD,MNEW,NCOMP,MCOMP,ISTART,IEND,
+     &COMP_OF_PANEL,NEXT_NODE,AVRD,CVRD,GAMMAD,GAMMA_PARENT,
+     &SPLIT_TIME,VOLBEF,CENBEF,DVDT,VOLAFT,CENAFT,VCOMP,CCOMP,
+     &QRECOMP,QCLOSURE,MESHRATIO,RDMIN,RETA,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2,MAXVR=2)
+      CHARACTER*(*) FILENAME
+      CHARACTER*256 LINE
+      INTEGER MCOMP(MAXCOMP),ISTART(MAXCOMP),IEND(MAXCOMP)
+      INTEGER COMP_OF_PANEL(NPA),NEXT_NODE(NPA)
+      DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),FID(NPA),PSI(NPA)
+      DIMENSION DL(NPA),DLM(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AFI(NPA),BFI(NPA),CFI(NPA),DFI(NPA)
+      DIMENSION QVR(NPA),QVRN(NPA),QREM(NPA),QREMN(NPA),QTOTAL(NPA)
+      DIMENSION AVRD(MAXVR),CVRD(MAXVR),GAMMAD(MAXVR)
+      DIMENSION AVR_OLD_MULTI(MAXVR),CVR_OLD_MULTI(MAXVR)
+      DIMENSION RDMIN_OLD_MULTI(MAXVR),RETA_OLD_MULTI(MAXVR)
+      DIMENSION VCOMP_REBOUND(MAXCOMP)
+      DIMENSION VCOMP(MAXCOMP),CCOMP(MAXCOMP),QRECOMP(MAXCOMP)
+      DIMENSION QCLOSURE(MAXCOMP),MESHRATIO(MAXCOMP)
+      DOUBLE PRECISION MESHRATIO
+      DOUBLE PRECISION LDOM,LSAT
+      DIMENSION RDMIN(MAXVR),RETA(MAXVR)
+      DIMENSION RO(NPA),ZO(NPA),QRO(NPA),QTO(NPA),PSIO(NPA)
+      DIMENSION AR0(NPA),BR0(NPA),CR0(NPA),DR0(NPA)
+      DIMENSION AZ0(NPA),BZ0(NPA),CZ0(NPA),DZ0(NPA)
+      DIMENSION DL0(NPA),DLM0(NPA),RR0(NPA),ZZ0(NPA)
+      DIMENSION AQ0(NPA),BQ0(NPA),CQ0(NPA),DQ0(NPA)
+      DIMENSION QVR0(NPA),QVRN0(NPA),QOLDN(NPA),QVRJUMP(MAXCOMP)
+      IFAIL=0
+      NREAD=0
+      SPLIT_TIME=-1.0D0
+      VOLBEF=-1.0D0
+      CENBEF=0.0D0
+      DVDT=0.0D0
+      FA=-1.0D0
+      FB=-1.0D0
+      QA=0.0D0
+      QB=0.0D0
+      OPEN(UNIT=339,FILE=FILENAME,STATUS='OLD',IOSTAT=IOS)
+      IF (IOS.NE.0) THEN
+      IFAIL=10
+      RETURN
+      ENDIF
+   10 READ(339,'(A)',IOSTAT=IOS) LINE
+      IF (IOS.NE.0) GO TO 30
+      IP=INDEX(LINE,'# TIME')
+      IF (IP.GT.0) READ(LINE(IP+6:),*,IOSTAT=IOS2) SPLIT_TIME
+      IP=INDEX(LINE,'# CONTACT_PANELS')
+      IF (IP.GT.0) READ(LINE(IP+16:),*,IOSTAT=IOS2) JA,JB
+      IP=INDEX(LINE,'# CONTACT_FRACTIONS')
+      IF (IP.GT.0) READ(LINE(IP+19:),*,IOSTAT=IOS2) FA,FB
+      IP=INDEX(LINE,'# SIDE_A')
+      IF (IP.GT.0) READ(LINE(IP+8:),*,IOSTAT=IOS2) RA,ZA,QA
+      IP=INDEX(LINE,'# SIDE_B')
+      IF (IP.GT.0) READ(LINE(IP+8:),*,IOSTAT=IOS2) RB,ZB,QB
+      IP=INDEX(LINE,'# CONTACT_MIDPOINT')
+      IF (IP.GT.0) READ(LINE(IP+18:),*,IOSTAT=IOS2) RCONTACT,ZCONTACT
+      IP=INDEX(LINE,'# VOLUME V_OVER_V0 CENTROID DVDT')
+      IF (IP.GT.0) READ(LINE(IP+32:),*,IOSTAT=IOS2)
+     &VOLBEF,VDUM,CENBEF,DVDT
+      IP=INDEX(LINE,'# RING1_A C CIRCULATION')
+      IF (IP.GT.0) READ(LINE(IP+23:),*,IOSTAT=IOS2)
+     &APARENT,CPARENT,GPARENT_FILE
+      IF (INDEX(LINE,'# NODE R Z QREM').GT.0) GO TO 20
+      GO TO 10
+   20 DO 21 J=1,MOLD+1
+      READ(339,*,IOSTAT=IOS) JJ,RO(J),ZO(J),QRO(J),QTO(J),PSIO(J),
+     &QD1,QD2,QD3
+      IF (IOS.NE.0.OR.JJ.NE.J) THEN
+      CLOSE(339)
+      IFAIL=11
+      RETURN
+      ENDIF
+      NREAD=NREAD+1
+   21 CONTINUE
+   30 CLOSE(339)
+C     Structural validity only.  The former exact pin to one historical
+C     (SPLIT_TIME,GAMMA_PARENT) pair is replaced by generic range checks
+C     so that any valid contact checkpoint can be split at its own
+C     recorded contact location.
+      IF (MOLD.LT.8.OR.NREAD.NE.MOLD+1.OR.JA.LT.1.OR.JB.GT.MOLD.OR.
+     &JA.GE.JB) THEN
+      IFAIL=12
+      RETURN
+      ENDIF
+      IF (SPLIT_TIME.LE.0.0D0.OR.DABS(GPARENT_FILE).LE.1.0D-12.OR.
+     &FA.LT.0.0D0.OR.FA.GT.1.0D0.OR.FB.LT.0.0D0.OR.FB.GT.1.0D0) THEN
+      IFAIL=13
+      RETURN
+      ENDIF
+C     The parent circulation is taken from the checkpoint itself, not
+C     from a compiled-in constant.
+      GAMMA_PARENT=GPARENT_FILE
+      IF (DABS(RO(MOLD+1)-RO(1))+DABS(ZO(MOLD+1)-ZO(1)).GT.
+     &1.0D-12) THEN
+      IFAIL=14
+      RETURN
+      ENDIF
+      CALL REBUILD_TOROIDAL_GEOMETRY(RO,ZO,DL0,DLM0,AR0,BR0,CR0,
+     &DR0,AZ0,BZ0,CZ0,DZ0,RR0,ZZ0,MOLD,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=15
+      RETURN
+      ENDIF
+      CALL PERIODIC_SPLINE_NODES(QRO,DL0,AQ0,BQ0,CQ0,DQ0,MOLD,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=16
+      RETURN
+      ENDIF
+      CALL COMPUTE_QVR_ON_BUBBLE(DL0,AR0,BR0,CR0,DR0,AZ0,BZ0,CZ0,
+     &DZ0,APARENT,CPARENT,GAMMA_PARENT,QVR0,QVRN0,MOLD,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=17
+      RETURN
+      ENDIF
+      SA=DL0(JA)+FA*(DL0(JA+1)-DL0(JA))
+      SB=DL0(JB)+FB*(DL0(JB+1)-DL0(JB))
+      PERIOD=DL0(MOLD+1)
+      LDOM=SB-SA
+      LSAT=PERIOD-LDOM
+      WRITE(*,*)'RESTART CONTACT PARAMETERS',JA,JB,FA,FB,SA,SB,
+     &PERIOD,LDOM,LSAT
+      IF (LDOM.LE.0.0D0.OR.LSAT.LE.0.0D0) THEN
+      IFAIL=18
+      RETURN
+      ENDIF
+C     64 panels resolve the dominant cusp surgery; 32 retain the small
+C     satellite with comfortable ideal-ring clearance in panel units.
+      NCOMP=2
+      MCOMP(1)=64
+      MCOMP(2)=32
+      ISTART(1)=1
+      IEND(1)=MCOMP(1)
+      ISTART(2)=IEND(1)+1
+      IEND(2)=ISTART(2)+MCOMP(2)-1
+      MNEW=IEND(2)
+      DO 40 IC=1,NCOMP
+      DO 35 J=ISTART(IC),IEND(IC)
+      COMP_OF_PANEL(J)=IC
+      NEXT_NODE(J)=J+1
+   35 CONTINUE
+      NEXT_NODE(IEND(IC))=ISTART(IC)
+   40 CONTINUE
+C     Daughter circulations from the checkpoint's own contact data rather
+C     than compiled-in constants.  The potential jump across the contact,
+C     QB-QA, is the circulation carried by the dominant loop; the
+C     remainder goes to the satellite so the pair sums to the parent
+C     (Kelvin).  This is the relation the checkpoint file itself records
+C     under DELTA_Q_QB_MINUS_QA.
+      GAMMAD(1)=QB-QA
+      GAMMAD(2)=GAMMA_PARENT-GAMMAD(1)
+      IF (DABS(GAMMAD(1)+GAMMAD(2)-GAMMA_PARENT).GT.1.0D-13) THEN
+      IFAIL=19
+      RETURN
+      ENDIF
+      WRITE(*,*)'SPLIT CIRCULATIONS FROM CHECKPOINT: PARENT=',
+     &GAMMA_PARENT,' DOMINANT=',GAMMAD(1),' SATELLITE=',GAMMAD(2)
+C     Localized reconnection: trim one half target panel from each incoming
+C     branch and replace only the two tips by their component-wise midpoint.
+C     This is the same neighbour-average surgery used at the first impact and
+C     prevents the coupled BEM from seeing two boundaries separated by the
+C     precontact 1.1E-6 gap.
+      HTRIMD=0.5D0*LDOM/DBLE(MCOMP(1))
+      SDA=SA+HTRIMD
+      SDB=SB-HTRIMD
+      CALL EVALUATE_PARENT_UNWRAPPED(SDA,PERIOD,DL0,AR0,BR0,CR0,DR0,
+     &AZ0,BZ0,CZ0,DZ0,AQ0,BQ0,CQ0,DQ0,QVRN0,APARENT,CPARENT,
+     &GAMMA_PARENT,RDA,ZDA,QDA,IERR,MOLD)
+      CALL EVALUATE_PARENT_UNWRAPPED(SDB,PERIOD,DL0,AR0,BR0,CR0,DR0,
+     &AZ0,BZ0,CZ0,DZ0,AQ0,BQ0,CQ0,DQ0,QVRN0,APARENT,CPARENT,
+     &GAMMA_PARENT,RDB,ZDB,QDB,IERR2,MOLD)
+      IF (IERR.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=20
+      RETURN
+      ENDIF
+      R(ISTART(1))=0.5D0*(RDA+RDB)
+      Z(ISTART(1))=0.5D0*(ZDA+ZDB)
+      QOLDN(ISTART(1))=0.5D0*(QDA+QDB-GAMMAD(1))
+      DO 50 K=2,MCOMP(1)
+      S=SDA+(SDB-SDA)*DBLE(K-2)/DBLE(MCOMP(1)-2)
+      J=ISTART(1)+K-1
+      CALL EVALUATE_PARENT_UNWRAPPED(S,PERIOD,DL0,AR0,BR0,CR0,DR0,
+     &AZ0,BZ0,CZ0,DZ0,AQ0,BQ0,CQ0,DQ0,QVRN0,APARENT,CPARENT,
+     &GAMMA_PARENT,R(J),Z(J),QOLDN(J),IERR,MOLD)
+      IF (IERR.NE.0) THEN
+      IFAIL=20
+      RETURN
+      ENDIF
+   50 CONTINUE
+      HTRIMS=0.5D0*LSAT/DBLE(MCOMP(2))
+      SSA=SB+HTRIMS
+      SSB=SA+PERIOD-HTRIMS
+      CALL EVALUATE_PARENT_UNWRAPPED(SSA,PERIOD,DL0,AR0,BR0,CR0,DR0,
+     &AZ0,BZ0,CZ0,DZ0,AQ0,BQ0,CQ0,DQ0,QVRN0,APARENT,CPARENT,
+     &GAMMA_PARENT,RSA,ZSA,QSA,IERR,MOLD)
+      CALL EVALUATE_PARENT_UNWRAPPED(SSB,PERIOD,DL0,AR0,BR0,CR0,DR0,
+     &AZ0,BZ0,CZ0,DZ0,AQ0,BQ0,CQ0,DQ0,QVRN0,APARENT,CPARENT,
+     &GAMMA_PARENT,RSB,ZSB,QSB,IERR2,MOLD)
+      IF (IERR.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=21
+      RETURN
+      ENDIF
+      R(ISTART(2))=0.5D0*(RSA+RSB)
+      Z(ISTART(2))=0.5D0*(ZSA+ZSB)
+      QOLDN(ISTART(2))=0.5D0*(QSA+QSB-GAMMAD(2))
+      DO 60 K=2,MCOMP(2)
+      S=SSA+(SSB-SSA)*DBLE(K-2)/DBLE(MCOMP(2)-2)
+      J=ISTART(2)+K-1
+      CALL EVALUATE_PARENT_UNWRAPPED(S,PERIOD,DL0,AR0,BR0,CR0,DR0,
+     &AZ0,BZ0,CZ0,DZ0,AQ0,BQ0,CQ0,DQ0,QVRN0,APARENT,CPARENT,
+     &GAMMA_PARENT,R(J),Z(J),QOLDN(J),IERR,MOLD)
+      IF (IERR.NE.0) THEN
+      IFAIL=21
+      RETURN
+      ENDIF
+   60 CONTINUE
+      WRITE(*,*)'DAUGHTER SURGERY CLOSURES DOMINANT=',R(ISTART(1)),
+     &Z(ISTART(1)),' SATELLITE=',R(ISTART(2)),Z(ISTART(2)),
+     &' GAP=',DSQRT((R(ISTART(1))-R(ISTART(2)))**2+
+     &(Z(ISTART(1))-Z(ISTART(2)))**2)
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,MNEW,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=22
+      RETURN
+      ENDIF
+      DO 70 IC=1,NCOMP
+      CALL FIND_COMPONENT_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ISTART(IC),IEND(IC),AVRD(IC),CVRD(IC),
+     &RDMIN(IC),HDUM,RETA(IC),IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=22+IC
+      RETURN
+      ENDIF
+   70 CONTINUE
+      CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVRD,CVRD,GAMMAD,2,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,
+     &MNEW,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=25
+      RETURN
+      ENDIF
+      DO 80 IC=1,NCOMP
+      QRECOMP(IC)=0.0D0
+      QCLOSURE(IC)=DABS(GAMMAD(IC)-QVRJUMP(IC))
+      DO 75 J=ISTART(IC),IEND(IC)
+      QREMN(J)=QOLDN(J)-QVRN(J)
+      QERR=DABS(QOLDN(J)-(QREMN(J)+QVRN(J)))
+      QRECOMP(IC)=DMAX1(QRECOMP(IC),QERR)
+   75 CONTINUE
+   80 CONTINUE
+      QREMN(MNEW+1)=QREMN(1)
+      QVRN(MNEW+1)=QVRN(1)
+      CALL BUILD_COMPONENT_NODE_FIELD_TO_CENTERS(QREMN,DL,DLM,FID,
+     &AFI,BFI,CFI,DFI,NCOMP,ISTART,IEND,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=26
+      RETURN
+      ENDIF
+      DO 90 J=1,MNEW
+      QREM(J)=FID(J)
+      QTOTAL(J)=FID(J)+QVR(J)
+      PSI(J)=0.0D0
+   90 CONTINUE
+C     The reconnection is geometry-localized, then reparameterized without
+C     smoothing.  This removes the short tip panels before the first BEM.
+      CALL BUILD_COMPONENT_CENTER_SPLINES(FID,DLM,DL,AFI,BFI,CFI,DFI,
+     &NCOMP,ISTART,IEND,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=27
+      RETURN
+      ENDIF
+      IRED=0
+      DO 91 IC=1,NCOMP
+      CALL COMPONENT_MESH_QUALITY(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ISTART(IC),IEND(IC),HMIN,HMAX,RTEST,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=28
+      RETURN
+      ENDIF
+      IF (RTEST.GT.2.5D0) THEN
+      CALL REDISTRIBUTE_DAUGHTER_COMPONENT_NODES(R,Z,QREMN,DL,DLM,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,
+     &IC,ISTART,IEND,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=29
+      RETURN
+      ENDIF
+      IRED=1
+      ENDIF
+   91 CONTINUE
+      IF (IRED.NE.0) THEN
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,MNEW,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=30
+      RETURN
+      ENDIF
+      CALL BUILD_COMPONENT_NODE_FIELD_TO_CENTERS(QREMN,DL,DLM,FID,
+     &AFI,BFI,CFI,DFI,NCOMP,ISTART,IEND,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=31
+      RETURN
+      ENDIF
+      CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVRD,CVRD,GAMMAD,2,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,
+     &MNEW,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=32
+      RETURN
+      ENDIF
+      DO 92 J=1,MNEW
+      QREM(J)=FID(J)
+      QTOTAL(J)=FID(J)+QVR(J)
+   92 CONTINUE
+      ENDIF
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,CCOMP,
+     &VOLAFT,CENAFT,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=27
+      RETURN
+      ENDIF
+      DO 100 IC=1,NCOMP
+      CALL COMPONENT_MESH_QUALITY(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ISTART(IC),IEND(IC),HMIN,HMAX,MESHRATIO(IC),IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=28
+      RETURN
+      ENDIF
+  100 CONTINUE
+      OPEN(UNIT=340,FILE='SECOND_SPLIT_COMPONENTS.plt',STATUS='REPLACE')
+      WRITE(340,*)'VARIABLES="R","Z","QOLD","QREM","QVR"'
+      DO 120 IC=1,NCOMP
+      WRITE(340,*)'ZONE I=',MCOMP(IC)+1,', F=POINT'
+      DO 110 J=ISTART(IC),IEND(IC)
+      WRITE(340,*)R(J),Z(J),QOLDN(J),QREMN(J),QVRN(J)
+  110 CONTINUE
+      J=ISTART(IC)
+      WRITE(340,*)R(J),Z(J),QOLDN(J)+GAMMAD(IC),QREMN(J),
+     &QVRN(J)+QVRJUMP(IC)
+  120 CONTINUE
+      CLOSE(340)
+      R(MNEW+1)=R(1)
+      Z(MNEW+1)=Z(1)
+      IFAIL=0
+      RETURN
+      END
+
+C     Build a periodic cubic representation for a closed toroidal meridian.
+C     Node M+1 is always reset to the exact compatibility copy of node 1.
+      SUBROUTINE REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),DL(NPA),DLM(NPA),RR(NPA),ZZ(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA),ARCL(NPA)
+      R(M+1)=R(1)
+      Z(M+1)=Z(1)
+      DL(1)=0.0D0
+      DO 10 J=2,M+1
+      DS=DSQRT((R(J)-R(J-1))**2+(Z(J)-Z(J-1))**2)
+      IF (DS.LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DL(J)=DL(J-1)+DS
+   10 CONTINUE
+      DO 30 ITER=1,4
+      CALL PERIODIC_SPLINE_NODES(R,DL,AR,BR,CR,DR,M,IERR1)
+      CALL PERIODIC_SPLINE_NODES(Z,DL,AZ,BZ,CZ,DZ,M,IERR2)
+      IF (IERR1.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      CALL TOROIDAL_ARCL(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,ARCL,M)
+      DL(1)=0.0D0
+      DO 20 J=2,M+1
+      IF (ARCL(J-1).LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DL(J)=DL(J-1)+ARCL(J-1)
+   20 CONTINUE
+   30 CONTINUE
+      CALL PERIODIC_SPLINE_NODES(R,DL,AR,BR,CR,DR,M,IERR1)
+      CALL PERIODIC_SPLINE_NODES(Z,DL,AZ,BZ,CZ,DZ,M,IERR2)
+      IF (IERR1.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 40 J=1,M
+      DLM(J)=0.5D0*(DL(J)+DL(J+1))
+   40 CONTINUE
+      CALL CUSPRR(DL,AR,BR,CR,DR,RR,M)
+      CALL CUSPZZ(DL,AZ,BZ,CZ,DZ,ZZ,M)
+      DO 50 J=1,M+1
+      IF (R(J).LE.0.0D0.OR.Z(J).LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+   50 CONTINUE
+      DO 60 J=1,M
+      IF (RR(J).LE.0.0D0.OR.ZZ(J).LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+   60 CONTINUE
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE TOROIDAL_ARCL(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &ARCL,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA),ARCL(NPA)
+      DIMENSION GX(5),GW(5)
+      DATA GX /-0.9061798459386640D0,-0.5384693101056831D0,
+     &0.0D0,0.5384693101056831D0,0.9061798459386640D0/
+      DATA GW /0.2369268850561891D0,0.4786286704993665D0,
+     &0.5688888888888889D0,0.4786286704993665D0,
+     &0.2369268850561891D0/
+      DO 20 J=1,M
+      SUM=0.0D0
+      DO 10 L=1,5
+      S=0.5D0*((DL(J+1)-DL(J))*GX(L)+DL(J+1)+DL(J))
+      DS=S-DL(J)
+      DRDS=BR(J)+2.0D0*CR(J)*DS+3.0D0*DR(J)*DS**2
+      DZDS=BZ(J)+2.0D0*CZ(J)*DS+3.0D0*DZ(J)*DS**2
+      SUM=SUM+GW(L)*DSQRT(DRDS**2+DZDS**2)
+   10 CONTINUE
+      ARCL(J)=0.5D0*(DL(J+1)-DL(J))*SUM
+   20 CONTINUE
+      RETURN
+      END
+
+C     Measure physical spline-panel arc lengths on the periodic contour.
+      SUBROUTINE TOROIDAL_MESH_QUALITY(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &HMIN,HMAX,MESH_RATIO,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DOUBLE PRECISION MESH_RATIO
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA),ARCL(NPA)
+      CALL TOROIDAL_ARCL(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,ARCL,M)
+      HMIN=1.0D100
+      HMAX=0.0D0
+      DO 10 J=1,M
+      IF (ARCL(J).LE.1.0D-12) THEN
+      IFAIL=1
+      MESH_RATIO=1.0D100
+      RETURN
+      ENDIF
+      HMIN=DMIN1(HMIN,ARCL(J))
+      HMAX=DMAX1(HMAX,ARCL(J))
+   10 CONTINUE
+      MESH_RATIO=HMAX/HMIN
+      IFAIL=0
+      RETURN
+      END
+
+C     Reparameterize the existing toroidal spline with M uniformly spaced
+C     physical arc-length locations.  FID is the authoritative centered
+C     QREM data.  It is interpolated periodically to both the new nodes
+C     (for diagnostics) and the new element centers (for the unchanged BEM).
+      SUBROUTINE REDISTRIBUTE_TOROIDAL_BUBBLE(R,Z,FID,DL,DLM,AR,BR,
+     &CR,DR,AZ,BZ,CZ,DZ,RR,ZZ,QREM_TARGET,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),FID(NPA),DL(NPA),DLM(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA),RR(NPA),ZZ(NPA)
+      DIMENSION QREM_TARGET(NPA),ARCL(NPA),RNEW(NPA),ZNEW(NPA)
+      DIMENSION QNEW(NPA),AQ(NPA),BQ(NPA),CQ(NPA),DQ(NPA),XQ(NPA)
+      CALL TOROIDAL_ARCL(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,ARCL,M)
+      TOTAL=0.0D0
+      DO 10 J=1,M
+      IF (ARCL(J).LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      TOTAL=TOTAL+ARCL(J)
+   10 CONTINUE
+      IF (TOTAL.LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      PERIOD_OLD=DL(M+1)
+      CALL PERIODIC_CENTER_SPLINE(FID,DLM,PERIOD_OLD,AQ,BQ,CQ,DQ,
+     &XQ,M,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+C
+C     Sample every new node before overwriting any old geometry value.
+      DO 20 J=1,M
+      STARGET=TOTAL*DBLE(J-1)/DBLE(M)
+      CALL TOROIDAL_PARAMETER_AT_ARCL(STARGET,TOTAL,ARCL,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,SPARAM,JPANEL,M,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DS=SPARAM-DL(JPANEL)
+      RNEW(J)=AR(JPANEL)+BR(JPANEL)*DS+CR(JPANEL)*DS**2+
+     &DR(JPANEL)*DS**3
+      ZNEW(J)=AZ(JPANEL)+BZ(JPANEL)*DS+CZ(JPANEL)*DS**2+
+     &DZ(JPANEL)*DS**3
+      CALL PERIODIC_CENTER_EVAL(SPARAM,XQ,PERIOD_OLD,AQ,BQ,CQ,DQ,
+     &QREM_TARGET(J),QDUM,M)
+   20 CONTINUE
+C
+C     The BEM Dirichlet data live at element centers.  Sample QREM at the
+C     corresponding half-offset uniform arc-length positions.
+      DO 30 J=1,M
+      STARGET=TOTAL*(DBLE(J)-0.5D0)/DBLE(M)
+      CALL TOROIDAL_PARAMETER_AT_ARCL(STARGET,TOTAL,ARCL,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,SPARAM,JPANEL,M,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      CALL PERIODIC_CENTER_EVAL(SPARAM,XQ,PERIOD_OLD,AQ,BQ,CQ,DQ,
+     &QNEW(J),QDUM,M)
+   30 CONTINUE
+      DO 40 J=1,M
+      R(J)=RNEW(J)
+      Z(J)=ZNEW(J)
+      FID(J)=QNEW(J)
+   40 CONTINUE
+      R(M+1)=R(1)
+      Z(M+1)=Z(1)
+      QREM_TARGET(M+1)=QREM_TARGET(1)
+      CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,M,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      IFAIL=0
+      RETURN
+      END
+
+C     Invert physical arc length on the current periodic cubic contour.
+      SUBROUTINE TOROIDAL_PARAMETER_AT_ARCL(STARGET,TOTAL,ARCL,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,SPARAM,JPANEL,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION ARCL(NPA),DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      IF (STARGET.LT.0.0D0.OR.STARGET.GE.TOTAL) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      SCUM=0.0D0
+      JPANEL=M
+      DO 10 J=1,M
+      IF (STARGET.LT.SCUM+ARCL(J).OR.J.EQ.M) THEN
+      JPANEL=J
+      GO TO 20
+      ENDIF
+      SCUM=SCUM+ARCL(J)
+   10 CONTINUE
+   20 SLOCAL=STARGET-SCUM
+      FLO=0.0D0
+      FHI=1.0D0
+      IF (SLOCAL.LE.0.0D0) THEN
+      FRAC=0.0D0
+      ELSE
+      DO 30 ITER=1,36
+      FRAC=0.5D0*(FLO+FHI)
+      CALL TOROIDAL_PARTIAL_ARCL(FRAC,JPANEL,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,SPART)
+      IF (SPART.LT.SLOCAL) THEN
+      FLO=FRAC
+      ELSE
+      FHI=FRAC
+      ENDIF
+   30 CONTINUE
+      FRAC=0.5D0*(FLO+FHI)
+      ENDIF
+      SPARAM=DL(JPANEL)+FRAC*(DL(JPANEL+1)-DL(JPANEL))
+      IFAIL=0
+      RETURN
+      END
+
+C     High-order quadrature for a partial periodic spline-panel arc length.
+      SUBROUTINE TOROIDAL_PARTIAL_ARCL(FRAC,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,VALUE)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION GX(8),GW(8)
+      DATA GX /-0.9602898564975363D0,-0.7966664774136267D0,
+     &-0.5255324099163290D0,-0.1834346424956498D0,
+     & 0.1834346424956498D0, 0.5255324099163290D0,
+     & 0.7966664774136267D0, 0.9602898564975363D0/
+      DATA GW /0.1012285362903763D0,0.2223810344533745D0,
+     &0.3137066458778873D0,0.3626837833783620D0,
+     &0.3626837833783620D0,0.3137066458778873D0,
+     &0.2223810344533745D0,0.1012285362903763D0/
+      DSEND=FRAC*(DL(J+1)-DL(J))
+      IF (DSEND.LE.0.0D0) THEN
+      VALUE=0.0D0
+      RETURN
+      ENDIF
+      SUM=0.0D0
+      DO 10 L=1,8
+      DS=0.5D0*DSEND*(GX(L)+1.0D0)
+      DRDS=BR(J)+2.0D0*CR(J)*DS+3.0D0*DR(J)*DS**2
+      DZDS=BZ(J)+2.0D0*CZ(J)*DS+3.0D0*DZ(J)*DS**2
+      SUM=SUM+GW(L)*DSQRT(DRDS**2+DZDS**2)
+   10 CONTINUE
+      VALUE=0.5D0*DSEND*SUM
+      RETURN
+      END
+
+C=======================================================================
+C     PERIODIC SPLINE SELF-CONTACT DETECTION AND PRECONTACT CAPTURE
+C=======================================================================
+      SUBROUTINE EVALUATE_SPLINE_PANEL(FRAC,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RP,ZP,RPF,ZPF,RPFF,ZPFF)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      H=DL(J+1)-DL(J)
+      DS=FRAC*H
+      RP=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZP=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      RPF=H*(BR(J)+2.0D0*CR(J)*DS+3.0D0*DR(J)*DS**2)
+      ZPF=H*(BZ(J)+2.0D0*CZ(J)*DS+3.0D0*DZ(J)*DS**2)
+      RPFF=H*H*(2.0D0*CR(J)+6.0D0*DR(J)*DS)
+      ZPFF=H*H*(2.0D0*CZ(J)+6.0D0*DZ(J)*DS)
+      RETURN
+      END
+
+      SUBROUTINE LINE_SEGMENT_SEPARATION(R1,Z1,R2,Z2,R3,Z3,R4,Z4,
+     &DIST,ALPHA,BETA,IINTER)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      UX=R2-R1
+      UZ=Z2-Z1
+      VX=R4-R3
+      VZ=Z4-Z3
+      WX=R3-R1
+      WZ=Z3-Z1
+      DEN=UX*VZ-UZ*VX
+      IINTER=0
+      IF (DABS(DEN).GT.1.0D-30) THEN
+      AA=(WX*VZ-WZ*VX)/DEN
+      BB=(WX*UZ-WZ*UX)/DEN
+      IF (AA.GE.0.0D0.AND.AA.LE.1.0D0.AND.
+     &BB.GE.0.0D0.AND.BB.LE.1.0D0) THEN
+      DIST=0.0D0
+      ALPHA=AA
+      BETA=BB
+      IINTER=1
+      RETURN
+      ENDIF
+      ENDIF
+      DIST=1.0D100
+      U2=UX*UX+UZ*UZ
+      V2=VX*VX+VZ*VZ
+C     Endpoint 1 projected onto segment 3--4.
+      BB=0.0D0
+      IF (V2.GT.0.0D0) BB=((R1-R3)*VX+(Z1-Z3)*VZ)/V2
+      BB=DMAX1(0.0D0,DMIN1(1.0D0,BB))
+      DX=R1-(R3+BB*VX)
+      DZ0=Z1-(Z3+BB*VZ)
+      DD=DSQRT(DX*DX+DZ0*DZ0)
+      IF (DD.LT.DIST) THEN
+      DIST=DD
+      ALPHA=0.0D0
+      BETA=BB
+      ENDIF
+C     Endpoint 2 projected onto segment 3--4.
+      BB=0.0D0
+      IF (V2.GT.0.0D0) BB=((R2-R3)*VX+(Z2-Z3)*VZ)/V2
+      BB=DMAX1(0.0D0,DMIN1(1.0D0,BB))
+      DX=R2-(R3+BB*VX)
+      DZ0=Z2-(Z3+BB*VZ)
+      DD=DSQRT(DX*DX+DZ0*DZ0)
+      IF (DD.LT.DIST) THEN
+      DIST=DD
+      ALPHA=1.0D0
+      BETA=BB
+      ENDIF
+C     Endpoint 3 projected onto segment 1--2.
+      AA=0.0D0
+      IF (U2.GT.0.0D0) AA=((R3-R1)*UX+(Z3-Z1)*UZ)/U2
+      AA=DMAX1(0.0D0,DMIN1(1.0D0,AA))
+      DX=R3-(R1+AA*UX)
+      DZ0=Z3-(Z1+AA*UZ)
+      DD=DSQRT(DX*DX+DZ0*DZ0)
+      IF (DD.LT.DIST) THEN
+      DIST=DD
+      ALPHA=AA
+      BETA=0.0D0
+      ENDIF
+C     Endpoint 4 projected onto segment 1--2.
+      AA=0.0D0
+      IF (U2.GT.0.0D0) AA=((R4-R1)*UX+(Z4-Z1)*UZ)/U2
+      AA=DMAX1(0.0D0,DMIN1(1.0D0,AA))
+      DX=R4-(R1+AA*UX)
+      DZ0=Z4-(Z1+AA*UZ)
+      DD=DSQRT(DX*DX+DZ0*DZ0)
+      IF (DD.LT.DIST) THEN
+      DIST=DD
+      ALPHA=AA
+      BETA=1.0D0
+      ENDIF
+      RETURN
+      END
+
+      SUBROUTINE REFINE_SPLINE_INTERSECTION(JA,JB,FA,FB,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,RA,ZA,RB,ZB,IOK)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      IOK=0
+      DO 10 ITER=1,30
+      CALL EVALUATE_SPLINE_PANEL(FA,JA,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RA,ZA,RAF,ZAF,RAFF,ZAFF)
+      CALL EVALUATE_SPLINE_PANEL(FB,JB,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RB,ZB,RBF,ZBF,RBFF,ZBFF)
+      DX=RA-RB
+      DZ0=ZA-ZB
+      IF (DSQRT(DX*DX+DZ0*DZ0).LE.1.0D-12) THEN
+      IOK=1
+      RETURN
+      ENDIF
+      DET=ZAF*RBF-RAF*ZBF
+      IF (DABS(DET).LE.1.0D-30) RETURN
+      DFA=(DX*ZBF-DZ0*RBF)/DET
+      DFB=(ZAF*DX-RAF*DZ0)/DET
+      FANEW=FA+DFA
+      FBNEW=FB+DFB
+      IF (FANEW.LT.-0.05D0.OR.FANEW.GT.1.05D0.OR.
+     &FBNEW.LT.-0.05D0.OR.FBNEW.GT.1.05D0) RETURN
+      FA=DMAX1(0.0D0,DMIN1(1.0D0,FANEW))
+      FB=DMAX1(0.0D0,DMIN1(1.0D0,FBNEW))
+   10 CONTINUE
+      CALL EVALUATE_SPLINE_PANEL(FA,JA,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RA,ZA,RAF,ZAF,RAFF,ZAFF)
+      CALL EVALUATE_SPLINE_PANEL(FB,JB,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RB,ZB,RBF,ZBF,RBFF,ZBFF)
+      IF (DSQRT((RA-RB)**2+(ZA-ZB)**2).LE.1.0D-11) IOK=1
+      RETURN
+      END
+
+      SUBROUTINE REFINE_SPLINE_CLOSEST(JA,JB,FA,FB,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,DMIN,RA,ZA,RB,ZB)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      FA0=FA
+      FB0=FB
+      CALL EVALUATE_SPLINE_PANEL(FA,JA,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RA,ZA,RAF,ZAF,RAFF,ZAFF)
+      CALL EVALUATE_SPLINE_PANEL(FB,JB,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RB,ZB,RBF,ZBF,RBFF,ZBFF)
+      DOLD=DSQRT((RA-RB)**2+(ZA-ZB)**2)
+      DO 10 ITER=1,30
+      DX=RA-RB
+      DZ0=ZA-ZB
+      F1=DX*RAF+DZ0*ZAF
+      F2=-DX*RBF-DZ0*ZBF
+      H11=RAF*RAF+ZAF*ZAF+DX*RAFF+DZ0*ZAFF
+      H22=RBF*RBF+ZBF*ZBF-DX*RBFF-DZ0*ZBFF
+      H12=-RAF*RBF-ZAF*ZBF
+      DET=H11*H22-H12*H12
+      IF (DABS(DET).LE.1.0D-30) GO TO 20
+      DFA=(-F1*H22+H12*F2)/DET
+      DFB=(-H11*F2+H12*F1)/DET
+      IF (DABS(DFA)+DABS(DFB).LE.1.0D-13) GO TO 20
+      FA=DMAX1(0.0D0,DMIN1(1.0D0,FA+DFA))
+      FB=DMAX1(0.0D0,DMIN1(1.0D0,FB+DFB))
+      CALL EVALUATE_SPLINE_PANEL(FA,JA,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RA,ZA,RAF,ZAF,RAFF,ZAFF)
+      CALL EVALUATE_SPLINE_PANEL(FB,JB,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RB,ZB,RBF,ZBF,RBFF,ZBFF)
+   10 CONTINUE
+   20 DNEW=DSQRT((RA-RB)**2+(ZA-ZB)**2)
+      IF (DNEW.GT.DOLD) THEN
+      FA=FA0
+      FB=FB0
+      CALL EVALUATE_SPLINE_PANEL(FA,JA,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RA,ZA,RAF,ZAF,RAFF,ZAFF)
+      CALL EVALUATE_SPLINE_PANEL(FB,JB,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RB,ZB,RBF,ZBF,RBFF,ZBFF)
+      DMIN=DOLD
+      ELSE
+      DMIN=DNEW
+      ENDIF
+      RETURN
+      END
+
+      SUBROUTINE FIND_MIN_NONNEIGHBOR_SPLINE_DISTANCE(DL,AR,BR,CR,
+     &DR,AZ,BZ,CZ,DZ,DMIN,JAOUT,JBOUT,FAOUT,FBOUT,RAOUT,ZAOUT,
+     &RBOUT,ZBOUT,HLOCAL,IINTERSECT,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,NSUB=12)
+      INTEGER JAOUT,JBOUT,IINTERSECT
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA),ARCL(NPA)
+      DIMENSION RS(NPA,0:NSUB),ZS(NPA,0:NSUB)
+      DO 20 J=1,M
+      DO 10 L=0,NSUB
+      FRAC=DBLE(L)/DBLE(NSUB)
+      CALL EVALUATE_SPLINE_PANEL(FRAC,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RS(J,L),ZS(J,L),RD,ZD,RDD,ZDD)
+   10 CONTINUE
+   20 CONTINUE
+      DMIN=1.0D100
+      IINTERSECT=0
+      JAOUT=0
+      JBOUT=0
+      DO 60 JA=1,M-1
+      DO 50 JB=JA+1,M
+      IF (JB.EQ.JA+1) GO TO 50
+      IF (JA.EQ.1.AND.JB.EQ.M) GO TO 50
+      DO 40 IA=0,NSUB-1
+      DO 30 IB=0,NSUB-1
+      CALL LINE_SEGMENT_SEPARATION(RS(JA,IA),ZS(JA,IA),
+     &RS(JA,IA+1),ZS(JA,IA+1),RS(JB,IB),ZS(JB,IB),
+     &RS(JB,IB+1),ZS(JB,IB+1),DD,AA,BB,ISEG)
+      FA=(DBLE(IA)+AA)/DBLE(NSUB)
+      FB=(DBLE(IB)+BB)/DBLE(NSUB)
+      IF (ISEG.NE.0) THEN
+      CALL REFINE_SPLINE_INTERSECTION(JA,JB,FA,FB,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RA,ZA,RB,ZB,IOK)
+      IF (IOK.NE.0) THEN
+      DMIN=0.0D0
+      JAOUT=JA
+      JBOUT=JB
+      FAOUT=FA
+      FBOUT=FB
+      RAOUT=RA
+      ZAOUT=ZA
+      RBOUT=RB
+      ZBOUT=ZB
+      IINTERSECT=1
+      GO TO 70
+      ENDIF
+      ENDIF
+      IF (DD.LT.DMIN) THEN
+      DMIN=DD
+      JAOUT=JA
+      JBOUT=JB
+      FAOUT=FA
+      FBOUT=FB
+      ENDIF
+   30 CONTINUE
+   40 CONTINUE
+   50 CONTINUE
+   60 CONTINUE
+      IF (JAOUT.EQ.0.OR.JBOUT.EQ.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      CALL REFINE_SPLINE_CLOSEST(JAOUT,JBOUT,FAOUT,FBOUT,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,DMIN,RAOUT,ZAOUT,RBOUT,ZBOUT)
+      IF (DMIN.LE.1.0D-12*DMAX1(1.0D0,DL(M+1))) THEN
+      DMIN=0.0D0
+      IINTERSECT=1
+      ENDIF
+   70 CALL TOROIDAL_ARCL(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,ARCL,M)
+      HLOCAL=0.5D0*(ARCL(JAOUT)+ARCL(JBOUT))
+      IF (HLOCAL.LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE EVALUATE_CONTACT_KINEMATICS(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,XQ,AQ,BQ,CQ,DQ,XP,AP,BP,CP,DP,A,C,CIRC,
+     &JA,FA,JB,FB,CLOSING,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DOUBLE PRECISION NR,NZ
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION XQ(NPA),AQ(NPA),BQ(NPA),CQ(NPA),DQ(NPA)
+      DIMENSION XP(NPA),AP(NPA),BP(NPA),CP(NPA),DP(NPA)
+      CALL CONTACT_SIDE_VELOCITY(JA,FA,DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &XQ,AQ,BQ,CQ,DQ,XP,AP,BP,CP,DP,A,C,CIRC,
+     &RA,ZA,UA,VA,M,IERR1)
+      CALL CONTACT_SIDE_VELOCITY(JB,FB,DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &XQ,AQ,BQ,CQ,DQ,XP,AP,BP,CP,DP,A,C,CIRC,
+     &RB,ZB,UB,VB,M,IERR2)
+      IF (IERR1.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      GAP=DSQRT((RB-RA)**2+(ZB-ZA)**2)
+      IF (GAP.LE.1.0D-14) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      NR=(RB-RA)/GAP
+      NZ=(ZB-ZA)/GAP
+      CLOSING=(UA-UB)*NR+(VA-VB)*NZ
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE CONTACT_SIDE_VELOCITY(J,FRAC,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,XQ,AQ,BQ,CQ,DQ,XP,AP,BP,CP,DP,A,C,CIRC,
+     &RP,ZP,UT,VT,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION XQ(NPA),AQ(NPA),BQ(NPA),CQ(NPA),DQ(NPA)
+      DIMENSION XP(NPA),AP(NPA),BP(NPA),CP(NPA),DP(NPA)
+      CALL EVALUATE_SPLINE_PANEL(FRAC,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RP,ZP,RF,ZF,RFF,ZFF)
+      TN=DSQRT(RF*RF+ZF*ZF)
+      IF (TN.LE.1.0D-14) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      TR=RF/TN
+      TZ=ZF/TN
+      S=DL(J)+FRAC*(DL(J+1)-DL(J))
+      CALL PERIODIC_CENTER_EVAL(S,XQ,DL(M+1),AQ,BQ,CQ,DQ,
+     &QREM,PSIS,M)
+      CALL PERIODIC_CENTER_EVAL(S,XP,DL(M+1),AP,BP,CP,DP,
+     &PSIN,PDUM,M)
+      UREM=PSIN*TZ+PSIS*TR
+      VREM=-PSIN*TR+PSIS*TZ
+      CALL VORTEX_RING_VELOCITY(RP,ZP,A,C,CIRC,UVR,VVR,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      UT=UREM+UVR
+      VT=VREM+VVR
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE TOROIDAL_SIGNED_AREA(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AREA,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION GX(5),GW(5)
+      DATA GX /-0.9061798459386640D0,-0.5384693101056831D0,
+     &0.0D0,0.5384693101056831D0,0.9061798459386640D0/
+      DATA GW /0.2369268850561891D0,0.4786286704993665D0,
+     &0.5688888888888889D0,0.4786286704993665D0,
+     &0.2369268850561891D0/
+      AREA=0.0D0
+      DO 20 J=1,M
+      H=DL(J+1)-DL(J)
+      SUM=0.0D0
+      DO 10 L=1,5
+      DS=0.5D0*H*(GX(L)+1.0D0)
+      RP=AR(J)+BR(J)*DS+CR(J)*DS**2+DR(J)*DS**3
+      ZP=AZ(J)+BZ(J)*DS+CZ(J)*DS**2+DZ(J)*DS**3
+      RPS=BR(J)+2.0D0*CR(J)*DS+3.0D0*DR(J)*DS**2
+      ZPS=BZ(J)+2.0D0*CZ(J)*DS+3.0D0*DZ(J)*DS**2
+      SUM=SUM+GW(L)*(RP*ZPS-ZP*RPS)
+   10 CONTINUE
+      AREA=AREA+0.25D0*H*SUM
+   20 CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE WRITE_PRECONTACT_CHECKPOINT(IUNIT,ISUM,ISTEP,
+     &IPOST,TIME,R,Z,RR,ZZ,FID,PSI,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,XQ,APSI,BPSI,CPSI,DPSI,XP,
+     &A,C,CIRC,QVR,QVRN,VOLUME,VOL0,CENTROID,DVDT,DMIN,HLOCAL,
+     &JA,JB,FA,FB,RA,ZA,RB,ZB,CLOSING,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),FID(NPA),PSI(NPA)
+      DIMENSION DL(NPA),DLM(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AFI(NPA),BFI(NPA),CFI(NPA),DFI(NPA),XQ(NPA)
+      DIMENSION APSI(NPA),BPSI(NPA),CPSI(NPA),DPSI(NPA),XP(NPA)
+      DIMENSION QVR(NPA),QVRN(NPA),QREMN(NPA),QTOTN(NPA)
+      DIMENSION PSIN(NPA),PSISN(NPA),UN(NPA),VN(NPA),ARCL(NPA)
+      CALL PERIODIC_CENTER_SPLINE(FID,DLM,DL(M+1),AFI,BFI,CFI,DFI,
+     &XQ,M,IERR1)
+      CALL PERIODIC_CENTER_SPLINE(PSI,DLM,DL(M+1),APSI,BPSI,CPSI,
+     &DPSI,XP,M,IERR2)
+      CALL COMPUTE_QVR_ON_BUBBLE(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &A,C,CIRC,QVR,QVRN,M,IERR3)
+      IF (IERR1.NE.0.OR.IERR2.NE.0.OR.IERR3.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 10 J=1,M+1
+      CALL PERIODIC_CENTER_EVAL(DL(J),XQ,DL(M+1),AFI,BFI,CFI,DFI,
+     &QREMN(J),PSISN(J),M)
+      CALL PERIODIC_CENTER_EVAL(DL(J),XP,DL(M+1),APSI,BPSI,CPSI,
+     &DPSI,PSIN(J),PDUM,M)
+      JJ=J
+      IF (JJ.GT.M) JJ=1
+      RF=BR(JJ)
+      ZF=BZ(JJ)
+      TN=DSQRT(RF*RF+ZF*ZF)
+      IF (TN.LE.1.0D-14) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      TR=RF/TN
+      TZ=ZF/TN
+      UREM=PSIN(J)*TZ+PSISN(J)*TR
+      VREM=-PSIN(J)*TR+PSISN(J)*TZ
+      CALL VORTEX_RING_VELOCITY(R(J),Z(J),A,C,CIRC,UVR,VVR,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      UN(J)=UREM+UVR
+      VN(J)=VREM+VVR
+      QTOTN(J)=QREMN(J)+QVRN(J)
+   10 CONTINUE
+      CALL TOROIDAL_ARCL(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,ARCL,M)
+      CALL TOROIDAL_SIGNED_AREA(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &SIGNED_AREA,M)
+      SA=DL(JA)+FA*(DL(JA+1)-DL(JA))
+      SB=DL(JB)+FB*(DL(JB+1)-DL(JB))
+      CALL PERIODIC_CENTER_EVAL(SA,XQ,DL(M+1),AFI,BFI,CFI,DFI,
+     &QREMA,PSISDUM,M)
+      CALL PERIODIC_CENTER_EVAL(SB,XQ,DL(M+1),AFI,BFI,CFI,DFI,
+     &QREMB,PSISDUM,M)
+      DPHIA=0.0D0
+      DPHIB=0.0D0
+      IERRA=0
+      IERRB=0
+      IF (FA.GT.1.0D-14) CALL VR_SPLINE_LINE_INTEGRAL(DL(JA),SA,
+     &JA,DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,A,C,CIRC,DPHIA,IERRA)
+      IF (FB.GT.1.0D-14) CALL VR_SPLINE_LINE_INTEGRAL(DL(JB),SB,
+     &JB,DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,A,C,CIRC,DPHIB,IERRB)
+      IF (IERRA.NE.0.OR.IERRB.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      QVRA=QVRN(JA)+DPHIA
+      QVRB=QVRN(JB)+DPHIB
+      QA=QREMA+QVRA
+      QB=QREMB+QVRB
+      DELTAQ=QB-QA
+      RMID=0.5D0*(RA+RB)
+      ZMID=0.5D0*(ZA+ZB)
+      WRITE(IUNIT,*)'# FULL-PRECISION VALID PRECONTACT CHECKPOINT'
+      WRITE(IUNIT,*)'# ACCEPTED_STEP POST_STEP',ISTEP,IPOST
+      WRITE(IUNIT,*)'# TIME',TIME
+      WRITE(IUNIT,*)'# CONTACT_PANELS',JA,JB
+      WRITE(IUNIT,*)'# CONTACT_FRACTIONS',FA,FB
+      WRITE(IUNIT,*)'# SIDE_A',RA,ZA,QA,QREMA,QVRA
+      WRITE(IUNIT,*)'# SIDE_B',RB,ZB,QB,QREMB,QVRB
+      WRITE(IUNIT,*)'# CONTACT_MIDPOINT',RMID,ZMID
+      WRITE(IUNIT,*)'# DMIN HLOCAL GAP_RATIO',DMIN,HLOCAL,DMIN/HLOCAL
+      WRITE(IUNIT,*)'# DELTA_Q_QB_MINUS_QA',DELTAQ
+      WRITE(IUNIT,*)'# NORMAL_CLOSING_SPEED',CLOSING
+      WRITE(IUNIT,*)'# VOLUME V_OVER_V0 CENTROID DVDT',VOLUME,
+     &VOLUME/VOL0,CENTROID,DVDT
+      WRITE(IUNIT,*)'# RING1_A C CIRCULATION',A,C,CIRC
+      WRITE(IUNIT,*)'# SIGNED_RZ_AREA',SIGNED_AREA
+      IF (SIGNED_AREA.LT.0.0D0) THEN
+      WRITE(IUNIT,*)'# CONTOUR_ORIENTATION CLOCKWISE'
+      ELSE
+      WRITE(IUNIT,*)'# CONTOUR_ORIENTATION COUNTERCLOCKWISE'
+      ENDIF
+      WRITE(IUNIT,*)'# NODE R Z QREM QTOTAL PSI_REM PSIS_REM U_TOTAL',
+     &' V_TOTAL'
+      DO 20 J=1,M+1
+      WRITE(IUNIT,1801)J,R(J),Z(J),QREMN(J),QTOTN(J),PSIN(J),
+     &PSISN(J),UN(J),VN(J)
+   20 CONTINUE
+      WRITE(IUNIT,*)'# PANEL RR ZZ QREM QVR QTOTAL PSI_REM PSIS_REM',
+     &' U_TOTAL V_TOTAL LENGTH'
+      DO 30 J=1,M
+      RF=BR(J)+2.0D0*CR(J)*(DLM(J)-DL(J))+
+     &3.0D0*DR(J)*(DLM(J)-DL(J))**2
+      ZF=BZ(J)+2.0D0*CZ(J)*(DLM(J)-DL(J))+
+     &3.0D0*DZ(J)*(DLM(J)-DL(J))**2
+      TN=DSQRT(RF*RF+ZF*ZF)
+      TR=RF/TN
+      TZ=ZF/TN
+      CALL PERIODIC_CENTER_EVAL(DLM(J),XQ,DL(M+1),AFI,BFI,CFI,DFI,
+     &QDUM,PSISC,M)
+      UREM=PSI(J)*TZ+PSISC*TR
+      VREM=-PSI(J)*TR+PSISC*TZ
+      CALL VORTEX_RING_VELOCITY(RR(J),ZZ(J),A,C,CIRC,UVR,VVR,IERR)
+      WRITE(IUNIT,1802)J,RR(J),ZZ(J),FID(J),QVR(J),
+     &FID(J)+QVR(J),PSI(J),PSISC,UREM+UVR,VREM+VVR,ARCL(J)
+   30 CONTINUE
+ 1801 FORMAT(I6,8(1X,ES26.17E3))
+ 1802 FORMAT(I6,10(1X,ES26.17E3))
+      CALL FLUSH(IUNIT)
+      WRITE(ISUM,*)'# LAST_VALID_TIME',TIME
+      WRITE(ISUM,*)'# ACCEPTED_STEP POST_STEP',ISTEP,IPOST
+      WRITE(ISUM,*)'# MINIMUM_GAP',DMIN
+      WRITE(ISUM,*)'# CONTACT_PANELS',JA,JB
+      WRITE(ISUM,*)'# CONTACT_FRACTIONS',FA,FB
+      WRITE(ISUM,*)'# CONTACT_SIDE_A',RA,ZA
+      WRITE(ISUM,*)'# CONTACT_SIDE_B',RB,ZB
+      WRITE(ISUM,*)'# CONTACT_COORDINATE_MIDPOINT',RMID,ZMID
+      WRITE(ISUM,*)'# Q_A Q_B DELTA_Q',QA,QB,DELTAQ
+      WRITE(ISUM,*)'# NORMAL_IMPACT_VELOCITY',CLOSING
+      WRITE(ISUM,*)'# V_OVER_V0 DVDT',VOLUME/VOL0,DVDT
+      WRITE(ISUM,*)'# SIGNED_RZ_AREA',SIGNED_AREA
+      IF (SIGNED_AREA.LT.0.0D0) THEN
+      WRITE(ISUM,*)'# ORIENTATION CLOCKWISE'
+      ELSE
+      WRITE(ISUM,*)'# ORIENTATION COUNTERCLOCKWISE'
+      ENDIF
+      WRITE(ISUM,*)'# SIDE_A IS PANEL JA; SIDE_B IS PANEL JB.'
+      WRITE(ISUM,*)'# WITH INCREASING-PANEL CONTOUR ORDER AND THIS',
+     &' SIDE LABELING, GAMMA2 WOULD BE Q_B-Q_A. SWAPPING SIDES OR',
+     &' REVERSING RING ORIENTATION REVERSES THE SIGN.'
+      CALL FLUSH(ISUM)
+      IFAIL=0
+      RETURN
+      END
+
+C     Periodic cubic spline through M unique node values.  X(M+1) is the
+C     period endpoint and Y(M+1) is the compatibility copy of Y(1).
+      SUBROUTINE PERIODIC_SPLINE_NODES(Y,X,A,B,C,D,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION Y(NPA),X(NPA),A(NPA),B(NPA),C(NPA),D(NPA)
+      DOUBLE PRECISION LOW
+      DIMENSION H(NPA),LOW(NPA),DIAG(NPA),UP(NPA)
+      DIMENSION RHS(NPA),SOL(NPA)
+      IFAIL=0
+      IF (M.LT.3) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 10 I=1,M
+      H(I)=X(I+1)-X(I)
+      IF (H(I).LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+   10 CONTINUE
+      DO 20 I=1,M
+      IM1=I-1
+      IF (IM1.LT.1) IM1=M
+      IP1=I+1
+      IF (IP1.GT.M) IP1=1
+      HP=H(IM1)
+      HC=H(I)
+      DIAG(I)=2.0D0*(HP+HC)
+      RHS(I)=3.0D0*((Y(IP1)-Y(I))/HC-(Y(I)-Y(IM1))/HP)
+      LOW(I)=HP
+      UP(I)=HC
+   20 CONTINUE
+      ALPHA=H(M)
+      BETA=H(M)
+      CALL CYCLIC_TRIDIAGONAL(LOW,DIAG,UP,ALPHA,BETA,RHS,
+     &SOL,M,IFAIL)
+      IF (IFAIL.NE.0) RETURN
+      DO 30 I=1,M
+      IP1=I+1
+      IF (IP1.GT.M) IP1=1
+      A(I)=Y(I)
+      C(I)=SOL(I)
+      B(I)=(Y(IP1)-Y(I))/H(I)-H(I)*(2.0D0*SOL(I)+SOL(IP1))/3.0D0
+      D(I)=(SOL(IP1)-SOL(I))/(3.0D0*H(I))
+   30 CONTINUE
+      A(M+1)=A(1)
+      B(M+1)=B(1)
+      C(M+1)=C(1)
+      D(M+1)=D(1)
+      RETURN
+      END
+
+      SUBROUTINE CYCLIC_TRIDIAGONAL(LOW,DIAG,UP,ALPHA,BETA,
+     &RHS,SOL,N,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DOUBLE PRECISION LOW
+      DIMENSION LOW(NPA),DIAG(NPA),UP(NPA),RHS(NPA),SOL(NPA)
+      DIMENSION BB(NPA),U(NPA),ZWORK(NPA)
+      GAMMA=-DIAG(1)
+      IF (DABS(GAMMA).LE.1.0D-30) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 10 I=1,N
+      BB(I)=DIAG(I)
+      U(I)=0.0D0
+   10 CONTINUE
+      BB(1)=DIAG(1)-GAMMA
+      BB(N)=DIAG(N)-ALPHA*BETA/GAMMA
+      CALL TRIDIAGONAL_SOLVE(LOW,BB,UP,RHS,SOL,N,IERR1)
+      U(1)=GAMMA
+      U(N)=ALPHA
+      CALL TRIDIAGONAL_SOLVE(LOW,BB,UP,U,ZWORK,N,IERR2)
+      IF (IERR1.NE.0.OR.IERR2.NE.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DEN=1.0D0+ZWORK(1)+BETA*ZWORK(N)/GAMMA
+      IF (DABS(DEN).LE.1.0D-30) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      FACT=(SOL(1)+BETA*SOL(N)/GAMMA)/DEN
+      DO 20 I=1,N
+      SOL(I)=SOL(I)-FACT*ZWORK(I)
+   20 CONTINUE
+      IFAIL=0
+      RETURN
+      END
+
+      SUBROUTINE TRIDIAGONAL_SOLVE(LOW,DIAG,UP,RHS,SOL,N,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DOUBLE PRECISION LOW
+      DIMENSION LOW(NPA),DIAG(NPA),UP(NPA),RHS(NPA),SOL(NPA)
+      DIMENSION GAM(NPA)
+      BET=DIAG(1)
+      IF (DABS(BET).LE.1.0D-30) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      SOL(1)=RHS(1)/BET
+      DO 10 J=2,N
+      GAM(J)=UP(J-1)/BET
+      BET=DIAG(J)-LOW(J)*GAM(J)
+      IF (DABS(BET).LE.1.0D-30) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      SOL(J)=(RHS(J)-LOW(J)*SOL(J-1))/BET
+   10 CONTINUE
+      DO 20 J=N-1,1,-1
+      SOL(J)=SOL(J)-GAM(J+1)*SOL(J+1)
+   20 CONTINUE
+      IFAIL=0
+      RETURN
+      END
+
+C     Periodic spline through element-centered data.  XC(M+1) closes one
+C     full contour period after the first collocation point.
+      SUBROUTINE PERIODIC_CENTER_SPLINE(Y,DLM,PERIOD,A,B,C,D,XC,
+     &M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION Y(NPA),DLM(NPA),A(NPA),B(NPA),C(NPA),D(NPA)
+      DIMENSION XC(NPA),YT(NPA)
+      DO 10 I=1,M
+      XC(I)=DLM(I)
+      YT(I)=Y(I)
+   10 CONTINUE
+      XC(M+1)=DLM(1)+PERIOD
+      YT(M+1)=YT(1)
+      CALL PERIODIC_SPLINE_NODES(YT,XC,A,B,C,D,M,IFAIL)
+      RETURN
+      END
+
+      SUBROUTINE PERIODIC_CENTER_EVAL(SIN,XC,PERIOD,A,B,C,D,
+     &VALUE,DERIV,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION XC(NPA),A(NPA),B(NPA),C(NPA),D(NPA)
+      S=SIN
+   10 IF (S.LT.XC(1)) THEN
+      S=S+PERIOD
+      GO TO 10
+      ENDIF
+   20 IF (S.GE.XC(1)+PERIOD) THEN
+      S=S-PERIOD
+      GO TO 20
+      ENDIF
+      J=M
+      DO 30 I=1,M
+      IF (S.GE.XC(I).AND.S.LT.XC(I+1)) THEN
+      J=I
+      GO TO 40
+      ENDIF
+   30 CONTINUE
+   40 DS=S-XC(J)
+      VALUE=A(J)+B(J)*DS+C(J)*DS**2+D(J)*DS**3
+      DERIV=B(J)+2.0D0*C(J)*DS+3.0D0*D(J)*DS**2
+      RETURN
+      END
+
+      SUBROUTINE WRITE_POSTCOLLAPSE_DIAGNOSTIC(IUNIT,TIME,TOPO,
+     &A,C,CIRC,VOLUME,CENTROID,R,Z,QREM,UREM,VREM,UVR,VVR,
+     &UTOTAL,VTOTAL,QJUMP,M)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      INTEGER TOPO
+      DOUBLE PRECISION MINWALL,MAXUREM,MAXUVR,MAXUTOTAL
+      DIMENSION R(NPA),Z(NPA),QREM(NPA),UREM(NPA),VREM(NPA)
+      DIMENSION UVR(NPA),VVR(NPA),UTOTAL(NPA),VTOTAL(NPA)
+      MINWALL=1.0D100
+      MAXUREM=0.0D0
+      MAXUVR=0.0D0
+      MAXUTOTAL=0.0D0
+      DO 10 J=1,M
+      MINWALL=DMIN1(MINWALL,Z(J))
+      MAXUREM=DMAX1(MAXUREM,DSQRT(UREM(J)**2+VREM(J)**2))
+      MAXUVR=DMAX1(MAXUVR,DSQRT(UVR(J)**2+VVR(J)**2))
+      MAXUTOTAL=DMAX1(MAXUTOTAL,
+     &DSQRT(UTOTAL(J)**2+VTOTAL(J)**2))
+   10 CONTINUE
+      WRITE(IUNIT,100)TIME,TOPO,A,C,CIRC,VOLUME,CENTROID,MINWALL,
+     &QJUMP,MAXUREM,MAXUVR,MAXUTOTAL
+      CALL FLUSH(IUNIT)
+  100 FORMAT(1X,ES20.11,1X,I2,10(1X,ES20.11))
+      RETURN
+      END
+>>>>>>> Stashed changes
 C******************************************************************
 C     SUBROUTINE GAUSSIAN QUADRATURE
       SUBROUTINE GAUSSCOM (FU1,FU2,ENT1,ENT2,I,J)
