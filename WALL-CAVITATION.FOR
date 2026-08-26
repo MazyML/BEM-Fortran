@@ -44,8 +44,12 @@ C=======================================================================
       INTEGER PRE_IMPACT,TOROIDAL,TWO_COMPONENT
       PARAMETER (PRE_IMPACT=0,TOROIDAL=1,TWO_COMPONENT=2)
       PARAMETER (MAXCOMP=2,MAXVR=2)
+C     The two-daughter split restart is selected at run time by the
+C     presence of a PRECONTACT_RESTART.dat checkpoint in the working
+C     directory.  Previously this was a compile-time .TRUE., which made
+C     the executable abort at startup whenever that file was absent, so
+C     a normal fresh case could not be run from the same binary.
       LOGICAL SECOND_SPLIT_RESTART
-      PARAMETER (SECOND_SPLIT_RESTART=.TRUE.)
       COMMON/POST_TOPOLOGY/BUBBLE_TOPOLOGY
       PARAMETER (POLYEXP=1.25D0)
       INTEGER FIELD_CALC_EVERY,FIELD_OUTPUT_EVERY
@@ -297,6 +301,7 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       REBOUND_CONFIRMED=.FALSE.
       STOP_AFTER_REBOUND=.FALSE.
       REDISTRIBUTION_PENDING=.FALSE.
+      INQUIRE(FILE='PRECONTACT_RESTART.dat',EXIST=SECOND_SPLIT_RESTART)
       CONTACT_RETRY_ACTIVE=.FALSE.
       CONTACT_RETRY_COUNT=0
       CONTACT_DTD_LIMIT=1.0D100
@@ -3714,15 +3719,25 @@ C     then packed into the one globally coupled BEM source list.
       NREAD=NREAD+1
    21 CONTINUE
    30 CLOSE(339)
-      IF (MOLD.NE.40.OR.NREAD.NE.MOLD+1.OR.JA.NE.1.OR.JB.NE.38) THEN
+C     Structural validity of the checkpoint only.  The previous test
+C     pinned this routine to one specific historical checkpoint (M=40,
+C     contact on panels 1 and 38, a fixed SPLIT_TIME and a fixed parent
+C     circulation), so no other contact state could be split.  These are
+C     replaced by generic range checks so that any valid checkpoint is
+C     split at its own recorded contact location.
+      IF (MOLD.LT.8.OR.NREAD.NE.MOLD+1.OR.JA.LT.1.OR.JB.GT.MOLD.OR.
+     &JA.GE.JB) THEN
       IFAIL=12
       RETURN
       ENDIF
-      IF (DABS(SPLIT_TIME-1.0398498899110975D0).GT.1.0D-12.OR.
-     &DABS(GPARENT_FILE-GAMMA_PARENT).GT.1.0D-12) THEN
+      IF (SPLIT_TIME.LE.0.0D0.OR.DABS(GPARENT_FILE).LE.1.0D-12.OR.
+     &FA.LT.0.0D0.OR.FA.GT.1.0D0.OR.FB.LT.0.0D0.OR.FB.GT.1.0D0) THEN
       IFAIL=13
       RETURN
       ENDIF
+C     Take the parent circulation from the checkpoint itself rather than
+C     from a compiled-in constant.
+      GAMMA_PARENT=GPARENT_FILE
       IF (DABS(RO(MOLD+1)-RO(1))+DABS(ZO(MOLD+1)-ZO(1)).GT.
      &1.0D-12) THEN
       IFAIL=14
@@ -3773,12 +3788,20 @@ C     satellite with comfortable ideal-ring clearance in panel units.
    35 CONTINUE
       NEXT_NODE(IEND(IC))=ISTART(IC)
    40 CONTINUE
-      GAMMAD(1)=-4.7664883813130619D0
-      GAMMAD(2)= 0.3613143645402071D0
+C     Daughter circulations are derived from the checkpoint's own contact
+C     data instead of compiled-in constants.  The potential jump across
+C     the contact, QB-QA, is the circulation carried by the dominant
+C     loop; the remainder goes to the satellite so that the pair sums to
+C     the parent (Kelvin).  This is the relation the checkpoint records
+C     as DELTA_Q_QB_MINUS_QA.
+      GAMMAD(1)=QB-QA
+      GAMMAD(2)=GAMMA_PARENT-GAMMAD(1)
       IF (DABS(GAMMAD(1)+GAMMAD(2)-GAMMA_PARENT).GT.1.0D-13) THEN
       IFAIL=19
       RETURN
       ENDIF
+      WRITE(*,*)'SPLIT CIRCULATIONS FROM CHECKPOINT: PARENT=',
+     &GAMMA_PARENT,' DOMINANT=',GAMMAD(1),' SATELLITE=',GAMMAD(2)
 C     Localized reconnection: trim one half target panel from each incoming
 C     branch and replace only the two tips by their component-wise midpoint.
 C     This is the same neighbour-average surgery used at the first impact and
