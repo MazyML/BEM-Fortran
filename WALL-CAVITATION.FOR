@@ -12,7 +12,7 @@ C     ********************************************************************
       PROGRAM WALLCAV
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NPA=600)
-      PARAMETER (MAXSTEPS=5000)
+      PARAMETER (MAXSTEPS=20000)
       COMMON/CONSTANT1/M,A0,A1,A2,A3,A4,B0,B1,B2,B3,B4,C1,C2,C3,
      *                C4,D1,D2,D3,D4,RM,RMD,PC,PINF,T,D,TD
       COMMON/CONSTANT2/DT,DTD,R0D,R0,FI0,FI0D,T0,R,Z,RX,ZX
@@ -39,11 +39,16 @@ C=======================================================================
       LOGICAL POSTCOLLAPSE_ENABLED
       PARAMETER (POSTCOLLAPSE_ENABLED=.TRUE.)
       INTEGER BUBBLE_TOPOLOGY,NVR,POST_STEPS,NRELOC,NREDIST
+      INTEGER PAIR_JA,PAIR_JB,PAIR_INT,NMERGED
       INTEGER REBOUND_POSITIVE_COUNT,REBOUND_FIRST_POSITIVE_STEP
       INTEGER COMP_OF_PANEL,KSTART
       INTEGER PRE_IMPACT,TOROIDAL,TWO_COMPONENT
       PARAMETER (PRE_IMPACT=0,TOROIDAL=1,TWO_COMPONENT=2)
       PARAMETER (MAXCOMP=2,MAXVR=2)
+C     A trailing daughter carrying at most this share of the remaining
+C     volume is retired when its own gap stops being resolved, instead
+C     of ending the run on an unrepresentable third topology event.
+      PARAMETER (RETIRE_FRACTION=0.05D0)
 C     The two-daughter split restart is selected at run time by the
 C     presence of a PRECONTACT_RESTART.dat checkpoint in the working
 C     directory.  Previously this was a compile-time .TRUE., which made
@@ -96,13 +101,14 @@ C     a normal fresh case could not be run from the same binary.
       DIMENSION QOLD(NPA),QOLD_NODE(NPA)
       DIMENSION UREM(NPA),VREM(NPA),UVR(NPA),VVR(NPA)
       DIMENSION UREMN(NPA),VREMN(NPA),UVRN(NPA),VVRN(NPA)
-      DIMENSION DLPSI(NPA)
+      DIMENSION DLPSI(NPA),XCQ(NPA),XCP(NPA)
       DIMENSION MCOMP(MAXCOMP),ISTART(MAXCOMP),IEND(MAXCOMP)
       DIMENSION COMP_OF_PANEL(NPA),NEXT_NODE(NPA)
       DIMENSION AVRD(MAXVR),CVRD(MAXVR),GAMMAD(MAXVR)
       DIMENSION AVR_OLD_MULTI(MAXVR),CVR_OLD_MULTI(MAXVR)
       DIMENSION RDMIN_OLD_MULTI(MAXVR),RETA_OLD_MULTI(MAXVR)
       DIMENSION VCOMP_REBOUND(MAXCOMP)
+      DIMENSION VSMBEF(MAXCOMP),CSMBEF(MAXCOMP)
       DIMENSION VCOMP_REDIS_OLD(MAXCOMP),CCOMP_REDIS_OLD(MAXCOMP)
       DIMENSION HMIN_COMP_OLD(MAXCOMP),HMAX_COMP_OLD(MAXCOMP)
       DIMENSION RATIO_COMP_OLD(MAXCOMP)
@@ -134,6 +140,22 @@ C     a normal fresh case could not be run from the same binary.
       PARAMETER (CONTACT_APPROACH_RATIO=0.35D0)
       PARAMETER (CONTACT_CAPTURE_RATIO=1.0D-4)
       PARAMETER (CONTACT_STEP_SAFETY=0.75D0)
+C     A lone daughter is captured while its neck is still resolved.  Driving
+C     that approach to the first-contact ratio instead lets the surface
+C     speed run away: the step control below holds the Bernoulli increment
+C     at ADFD, so once the speed term dominates it trades time for
+C     potential, the clock stops advancing and the neck keeps closing.
+      PARAMETER (CONTACT_CAPTURE_SOLO=0.05D0)
+C     Speed at which that trade has clearly begun.  The validated first and
+C     second daughter contacts peak near 400, so this is well clear of them.
+      PARAMETER (VMAX_CAPTURE=2.0D3)
+C     Smallest step that still moves the clock usefully.  Chosen from the
+C     runs themselves: healthy generations bottom out at 6E-7 and 1E-8,
+C     while one that has fallen into trading time for potential sits at
+C     7E-12, so this separates them by more than a decade either way.
+      PARAMETER (DT_FLOOR=1.0D-9)
+C     Accepted steps between daughter smoothings.  Zero disables it.
+      PARAMETER (NSMOOTH=10)
       DOUBLE PRECISION MAX_Q_RECOMP,MAX_Q_RECOMP_ALL
       DOUBLE PRECISION MAXUVR_OLD,MAXUVR_NEW
       DOUBLE PRECISION MESH_RATIO,MESH_RATIO_BEFORE
@@ -254,6 +276,19 @@ C	OPEN(UNIT=3000,FILE='NOZ.plt')
       OPEN(UNIT=334,FILE='MULTICOMP_CONTACT_DIAG.dat',STATUS='REPLACE')
       WRITE(334,*)'# STEP POST_STEP TIME COMPONENT DMIN HLOCAL RATIO',
      &' PANEL_A PANEL_B INTERSECT R_MID Z_MID'
+      OPEN(UNIT=336,FILE='COMPONENT_RETIREMENT_DIAG.dat',
+     &STATUS='REPLACE')
+      OPEN(UNIT=341,FILE='INTERCOMPONENT_DIAG.dat',STATUS='REPLACE')
+      WRITE(341,*)'# STEP POST_STEP TIME DMIN HLOCAL RATIO',
+     &' PANEL_A PANEL_B INTERSECT R_MID Z_MID VMAX'
+      OPEN(UNIT=342,FILE='MERGE_DIAG.dat',STATUS='REPLACE')
+      WRITE(342,*)'# COALESCENCE EVENTS'
+      OPEN(UNIT=338,FILE='SMOOTHING_DIAG.dat',STATUS='REPLACE')
+      WRITE(338,*)'# STEP POST_STEP TIME COMPONENT VOLUME_BEFORE',
+     &' VOLUME_RAW REL_CHANGE RESCALE VMAX'
+      WRITE(336,*)'# EVENT STEP POST_STEP TIME COMPONENT PANELS',
+     &' VOLUME VOLUME_FRACTION CENTROID GAMMA DMIN HLOCAL',
+     &' GAP_RATIO INTERSECT R_MID Z_MID'
       ENDIF
 
       WRITE(30,*)'TITLE="SIMPLE DATA FILE" '
@@ -293,6 +328,8 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       POST_STEPS=0
       NRELOC=0
       NREDIST=0
+      NRETIRED=0
+      NMERGED=0
       REBOUND_POSITIVE_COUNT=0
       REBOUND_FIRST_POSITIVE_STEP=0
       HAVE_POST_VOLUME=.FALSE.
@@ -490,7 +527,7 @@ C=======================================================================
      &R,Z,RR,ZZ,FID,PSI,DL,DLM,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
      &AFI,BFI,CFI,DFI,QVR,QVR_NODE,QREM,QREM_NODE,QTOTAL,
      &MSTART,MNEW,NCOMP,MCOMP,ISTART,IEND,COMP_OF_PANEL,NEXT_NODE,
-     &AVRD,CVRD,GAMMAD,GAMMA_PARENT,SPLIT_TIME,
+     &AVRD,CVRD,GAMMAD,GAMMA_PARENT,KRESTART,NPRESTART,SPLIT_TIME,
      &SPLIT_VOLUME_BEFORE,SPLIT_CENTROID_BEFORE,DVDT_RESTART,
      &SPLIT_VOLUME_AFTER,SPLIT_CENTROID_AFTER,VCOMP,CCOMP,
      &QRECOMP_COMP,QCLOSURE_COMP,MESH_RATIO_COMP,
@@ -515,9 +552,13 @@ C=======================================================================
       VEP(J)=0.0D0
 13555 CONTINUE
       BUBBLE_TOPOLOGY=TWO_COMPONENT
-      NVR=2
+      NVR=NCOMP
       POST_STEPS=34
       KSTART=352
+      IF (KRESTART.GT.0.AND.NPRESTART.GT.0) THEN
+      POST_STEPS=NPRESTART
+      KSTART=KRESTART+1
+      ENDIF
       DTIME=SPLIT_TIME
       VOLT=SPLIT_VOLUME_AFTER
       CEN=SPLIT_CENTROID_AFTER
@@ -546,6 +587,16 @@ C=======================================================================
       WRITE(330,*)'# GAMMA_PARENT DOMINANT SATELLITE SUM RESIDUAL',
      &GAMMA_PARENT,GAMMAD(1),GAMMAD(2),GAMMAD(1)+GAMMAD(2),
      &GAMMAD(1)+GAMMAD(2)-GAMMA_PARENT
+      IF (NCOMP.EQ.1) THEN
+      WRITE(330,*)'# DISCARDED_DAUGHTER PANELS VOLUME FRACTION',
+     &' CENTROID GAMMA',MCOMP(2),VCOMP(2),
+     &VCOMP(2)/(VCOMP(2)+SPLIT_VOLUME_AFTER),CCOMP(2),GAMMAD(2)
+      WRITE(330,*)'# RETAINED_VOLUME_IS_ONE_DAUGHTER',
+     &SPLIT_VOLUME_AFTER
+      ELSE
+      WRITE(330,*)'# BOTH_DAUGHTERS_KEPT SMALLER_FRACTION',
+     &DMIN1(VCOMP(1),VCOMP(2))/SPLIT_VOLUME_AFTER
+      ENDIF
       DO 13557 IC=1,NCOMP
       WRITE(330,*)'# COMPONENT',IC,' PANELS',MCOMP(IC),
      &' VOLUME FRACTION CENTROID',VCOMP(IC),VCOMP(IC)/VOLT,CCOMP(IC)
@@ -559,6 +610,49 @@ C=======================================================================
       WRITE(*,*)'TWO-DAUGHTER SPLIT INITIALIZED AT T=',DTIME
       WRITE(*,*)'COMPONENT VOLUMES=',VCOMP(1),VCOMP(2)
       WRITE(*,*)'DAUGHTER CIRCULATIONS=',GAMMAD(1),GAMMAD(2)
+C=======================================================================
+C     The split routine drops the smaller daughter only when it is small
+C     enough to be worth dropping, and it does so before QREM is formed.
+C     A returned NCOMP of one means a loop was discarded and its figures
+C     are parked in slot 2 for reporting; two means both loops are live
+C     and the run continues as a two-component problem.
+C=======================================================================
+      IF (NCOMP.LT.1.OR.NCOMP.GT.2) THEN
+      WRITE(*,*)'UNEXPECTED DAUGHTER COUNT AT THE SPLIT',NCOMP
+      STOP
+      ENDIF
+      IF (NCOMP.EQ.2) THEN
+      WRITE(*,*)'BOTH DAUGHTERS RETAINED AND EVOLVING M=',M,
+     &' VOLUMES=',VCOMP(1),VCOMP(2)
+      GO TO 13561
+      ENDIF
+      NRETIRED=NRETIRED+1
+      WRITE(336,*)NRETIRED,KSTART-1,POST_STEPS,DTIME,2,MCOMP(2),
+     &VCOMP(2),VCOMP(2)/(VCOMP(2)+VOLT),CCOMP(2),GAMMAD(2),
+     &0.0D0,0.0D0,0.0D0,0,0.0D0,0.0D0
+      CALL FLUSH(336)
+      WRITE(*,*)'SATELLITE DISCARDED AT CREATION: VOLUME=',VCOMP(2),
+     &' FRACTION=',VCOMP(2)/(VCOMP(2)+VOLT),
+     &' CIRCULATION=',GAMMAD(2)
+      WRITE(*,*)'CONTINUING WITH THE DOMINANT DAUGHTER ONLY M=',M,
+     &' VOLUME=',VOLT
+      MCOMP(2)=0
+      ISTART(2)=0
+      IEND(2)=0
+      VCOMP(2)=0.0D0
+      CCOMP(2)=0.0D0
+      VREFCOMP(2)=0.0D0
+      PGASCOMP(2)=0.0D0
+      MESH_RATIO_COMP(2)=0.0D0
+      QRECOMP_COMP(2)=0.0D0
+      QCLOSURE_COMP(2)=0.0D0
+      AVRD(2)=0.0D0
+      CVRD(2)=0.0D0
+      GAMMAD(2)=0.0D0
+      DO 13558 J=M+1,NPA
+      COMP_OF_PANEL(J)=0
+13558 CONTINUE
+13561 CONTINUE
       ENDIF
 CSAL      WRITE(31,1031)PCOM(M+1),PSICS(M+1),Z(M+2)
 CSAL      IF (K.LE.200) GO TO 1220
@@ -1044,12 +1138,114 @@ C=======================================================================
       ENDIF
       ENDIF
 C=======================================================================
+C     COALESCENCE GUARD.
+C
+C     Two live components are watched for closing on each other, which no
+C     other check sees: the self-distance guard below looks inside one
+C     loop at a time.  When they meet they are merged into a single loop
+C     rather than one of them being removed, on the same gap ratio used to
+C     capture a contact within a single daughter.
+C=======================================================================
+      IF (ILS.EQ.1.AND.BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT
+     &.AND.NCOMP.EQ.2) THEN
+      CALL FIND_INTERCOMPONENT_DISTANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ISTART(1),IEND(1),ISTART(2),IEND(2),
+     &PAIR_DMIN,PAIR_JA,PAIR_JB,PAIR_FA,PAIR_FB,
+     &PAIR_RA,PAIR_ZA,PAIR_RB,PAIR_ZB,PAIR_H,PAIR_INT,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO MEASURE INTERCOMPONENT DISTANCE'
+      STOP
+      ENDIF
+      PAIR_RATIO=PAIR_DMIN/PAIR_H
+      WRITE(341,*)K-1,POST_STEPS,DTIME,PAIR_DMIN,PAIR_H,
+     &PAIR_RATIO,PAIR_JA,PAIR_JB,PAIR_INT,
+     &0.5D0*(PAIR_RA+PAIR_RB),0.5D0*(PAIR_ZA+PAIR_ZB),VMAX
+      CALL FLUSH(341)
+      IMERGE=0
+      IF (PAIR_RATIO.LE.CONTACT_CAPTURE_SOLO) IMERGE=1
+      IF (PAIR_INT.NE.0) IMERGE=1
+      IF (IMERGE.EQ.1) THEN
+      MMERGE=MCOMP(1)+MCOMP(2)
+      IF (MMERGE.GT.128) MMERGE=128
+      WRITE(*,*)'COMPONENTS TOUCHING AT GAP/H=',PAIR_RATIO,
+     &' PANELS=',PAIR_JA,PAIR_JB
+      GAM1=GAMMAD(1)
+      GAM2=GAMMAD(2)
+      CALL MERGE_TWO_COMPONENTS(R,Z,RR,ZZ,FID,PSI,DL,DLM,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,
+     &QVR,QVR_NODE,QREM,QREM_NODE,QTOTAL,MCOMP,ISTART,IEND,
+     &COMP_OF_PANEL,NEXT_NODE,AVRD,CVRD,GAMMAD,
+     &PAIR_JA,PAIR_FA,PAIR_JB,PAIR_FB,MMERGE,
+     &MMNEW,GAMMERGE,AREAMB,VOLMAFT,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO MERGE COMPONENTS IFAIL=',IFAIL
+      STOP
+      ENDIF
+      NMERGED=NMERGED+1
+      VOLMBEF=VOLT
+      M=MMNEW
+      NCOMP=1
+      NVR=1
+      MHL=M+NWALL
+      IF (MHL.GT.NPA-2) THEN
+      WRITE(*,*)'MERGED PANEL COUNT EXCEEDS STORAGE',MHL,NPA
+      STOP
+      ENDIF
+      CALL DEFINEWALL(R,Z,RR,ZZ,M,MHL,WALLR)
+      DO 2617 J=M+1,MHL
+      PSICS(J)=0.0D0
+ 2617 CONTINUE
+      DO 2618 J=M+2,MHL+2
+      UEP(J)=0.0D0
+      VEP(J)=0.0D0
+ 2618 CONTINUE
+C     The merged loop keeps the gas of both parents, so its reference
+C     volume is the sum of theirs at the same reference pressure.
+      VREFCOMP(1)=VREFCOMP(1)+VREFCOMP(2)
+      VREFCOMP(2)=0.0D0
+      PGASCOMP(2)=0.0D0
+      MESH_RATIO_COMP(2)=0.0D0
+      QRECOMP_COMP(2)=0.0D0
+      QCLOSURE_COMP(2)=0.0D0
+      VCOMP(2)=0.0D0
+      CCOMP(2)=0.0D0
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,
+     &CCOMP,VOLT,CEN,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'INVALID VOLUME AFTER MERGE'
+      STOP
+      ENDIF
+      RATIO=VOLT/VOLI
+      WRITE(342,*)'# MERGE',NMERGED
+      WRITE(342,*)'# STEP POST_STEP TIME',K-1,POST_STEPS,DTIME
+      WRITE(342,*)'# GAP HLOCAL RATIO',PAIR_DMIN,PAIR_H,
+     &PAIR_RATIO
+      WRITE(342,*)'# LOCATION',0.5D0*(PAIR_RA+PAIR_RB),
+     &0.5D0*(PAIR_ZA+PAIR_ZB)
+      WRITE(342,*)'# GAMMA1 GAMMA2 SUM MERGED RESIDUAL',
+     &GAM1,GAM2,GAM1+GAM2,GAMMERGE,GAMMERGE-(GAM1+GAM2)
+      WRITE(342,*)'# VOLUME_BEFORE AFTER RELATIVE',VOLMBEF,
+     &VOLT,(VOLT-VOLMBEF)/VOLMBEF
+      WRITE(342,*)'# PANELS',MMERGE
+      CALL FLUSH(342)
+      WRITE(*,*)'MERGED INTO ONE LOOP: M=',M,' VOLUME=',VOLT,
+     &' GAMMA=',GAMMERGE,' SUM WAS=',GAM1+GAM2
+      VOLUME_PREV_ACCEPTED=VOLT
+      TIME_PREV_ACCEPTED=DTIME
+      HAVE_DVDT=.FALSE.
+      REBOUND_CANDIDATE=.FALSE.
+      REBOUND_POSITIVE_COUNT=0
+      GO TO 821
+      ENDIF
+      ENDIF
+C=======================================================================
 C     THIRD-TOPOLOGY GUARD.  A gap below 0.15 of the local panel scale is
 C     no longer spatially resolved by the present two-component model.  Stop
 C     on the last valid state; this task intentionally implements no third
 C     reconnection.
 C=======================================================================
-      IF (ILS.EQ.1.AND.BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT) THEN
+      IF (ILS.EQ.1.AND.BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT
+     &.AND.NCOMP.GT.1) THEN
       MULTI_DMIN=1.0D100
       MIN_MULTI_COMP=0
       DO 2606 IC=1,NCOMP
@@ -1076,7 +1272,9 @@ C=======================================================================
       ENDIF
  2606 CONTINUE
       CALL FLUSH(334)
-      IF (MULTI_INTERSECT.NE.0.OR.MULTI_GAP_RATIO.LT.0.15D0) THEN
+C     Fallback only.  The reduction above now handles an approaching
+C     contact at 0.05, so this fires only if that could not be applied.
+      IF (MULTI_GAP_RATIO.LT.0.02D0) THEN
       OPEN(UNIT=335,FILE='MULTICOMP_BLOCKER.dat',STATUS='REPLACE')
       WRITE(335,*)'# LAST_VALID_TWO_COMPONENT_STATE'
       WRITE(335,*)'# TIME STEP POST_STEP',DTIME,K-1,POST_STEPS
@@ -1104,7 +1302,29 @@ C     the field.  A closing gap caps the next Heun step; a sufficiently
 C     small valid gap is written at full precision and terminates the run.
 C=======================================================================
       CONTACT_DTD_LIMIT=1.0D100
-      IF (ILS.EQ.1.AND.BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      ISOLO=0
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) ISOLO=1
+      IF (BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT.AND.NCOMP.EQ.1) ISOLO=2
+      IF (ISOLO.EQ.1) THEN
+      AVRUSE=AVR
+      CVRUSE=CVR
+      GAMUSE=CIRC_VR
+      DO 2610 J=1,M+1
+      XCQ(J)=DL2(J)
+      XCP(J)=DLPSI(J)
+ 2610 CONTINUE
+      ELSEIF (ISOLO.EQ.2) THEN
+      AVRUSE=AVRD(1)
+      CVRUSE=CVRD(1)
+      GAMUSE=GAMMAD(1)
+      DO 2611 J=1,M
+      XCQ(J)=DLM(J)
+      XCP(J)=DLM(J)
+ 2611 CONTINUE
+      XCQ(M+1)=DLM(1)+DL(M+1)
+      XCP(M+1)=XCQ(M+1)
+      ENDIF
+      IF (ILS.EQ.1.AND.ISOLO.NE.0) THEN
       CALL FIND_MIN_NONNEIGHBOR_SPLINE_DISTANCE(DL,AR,BR,CR,DR,
      &AZ,BZ,CZ,DZ,CONTACT_DMIN,CONTACT_JA,CONTACT_JB,CONTACT_FA,
      &CONTACT_FB,CONTACT_RA,CONTACT_ZA,CONTACT_RB,CONTACT_ZB,
@@ -1119,9 +1339,9 @@ C=======================================================================
       STOP
       ENDIF
       CALL EVALUATE_CONTACT_KINEMATICS(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
-     &DL2,AFI,BFI,CFI,DFI,DLPSI,APSI,BPSI,CPSI,DPSI,
-     &AVR,CVR,CIRC_VR,CONTACT_JA,CONTACT_FA,CONTACT_JB,CONTACT_FB,
-     &CONTACT_CLOSING,M,IFAIL)
+     &XCQ,AFI,BFI,CFI,DFI,XCP,APSI,BPSI,CPSI,DPSI,
+     &AVRUSE,CVRUSE,GAMUSE,CONTACT_JA,CONTACT_FA,CONTACT_JB,
+     &CONTACT_FB,CONTACT_CLOSING,M,IFAIL)
       IF (IFAIL.NE.0) THEN
       WRITE(*,*)'FAILED TO EVALUATE SECONDARY CONTACT KINEMATICS'
       STOP
@@ -1134,14 +1354,29 @@ C=======================================================================
      &CONTACT_FA,CONTACT_FB,CONTACT_RMID,CONTACT_ZMID,
      &CONTACT_CLOSING
       CALL FLUSH(327)
-      IF (CONTACT_GAP_RATIO.LE.CONTACT_CAPTURE_RATIO.AND.
-     &CONTACT_CLOSING.GT.0.0D0) THEN
+      CAPTURE_USE=CONTACT_CAPTURE_RATIO
+      IF (ISOLO.EQ.2) CAPTURE_USE=CONTACT_CAPTURE_SOLO
+      ICAPT=0
+      IF (CONTACT_GAP_RATIO.LE.CAPTURE_USE) THEN
+      IF (ISOLO.EQ.2.OR.CONTACT_CLOSING.GT.0.0D0) ICAPT=1
+      ENDIF
+C     Speed trigger.  A neck can close slowly enough that the surface speed
+C     runs away before the gap reaches the ratio above, so an approach that
+C     is already fast is captured on the spot.
+      IF (ISOLO.EQ.2.AND.ICAPT.EQ.0.AND.VMAX.GT.VMAX_CAPTURE.AND.
+     &CONTACT_GAP_RATIO.LT.CONTACT_APPROACH_RATIO) THEN
+      ICAPT=1
+      WRITE(*,*)'CAPTURING ON SPEED: VMAX=',VMAX,' GAP/H=',
+     &CONTACT_GAP_RATIO
+      ENDIF
+      IF (ICAPT.EQ.1) THEN
       DVDT_CHECKPOINT=0.0D0
       IF (HAVE_DVDT) DVDT_CHECKPOINT=DVDT_PREV
       CALL WRITE_PRECONTACT_CHECKPOINT(328,329,K-1,POST_STEPS,DTIME,
      &R,Z,RR,ZZ,FID,PSI,DL,DLM,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
-     &AFI,BFI,CFI,DFI,DL2,APSI,BPSI,CPSI,DPSI,DLPSI,
-     &AVR,CVR,CIRC_VR,QVR,QVR_NODE,VOLT,VOLI,CEN,DVDT_CHECKPOINT,
+     &AFI,BFI,CFI,DFI,XCQ,APSI,BPSI,CPSI,DPSI,XCP,
+     &AVRUSE,CVRUSE,GAMUSE,QVR,QVR_NODE,VOLT,VOLI,CEN,
+     &DVDT_CHECKPOINT,
      &CONTACT_DMIN,CONTACT_HLOCAL,CONTACT_JA,CONTACT_JB,
      &CONTACT_FA,CONTACT_FB,CONTACT_RA,CONTACT_ZA,CONTACT_RB,
      &CONTACT_ZB,CONTACT_CLOSING,M,IFAIL)
@@ -1150,14 +1385,17 @@ C=======================================================================
       STOP
       ENDIF
       WRITE(*,*)'FULL-PRECISION PRECONTACT STATE SAVED AT T=',DTIME
+      WRITE(*,*)'CAPTURE RATIO USED=',CAPTURE_USE,' VMAX=',VMAX
       WRITE(*,*)'PANELS=',CONTACT_JA,CONTACT_JB,
      &' GAP=',CONTACT_DMIN,' GAP/H=',CONTACT_GAP_RATIO
       STOP
       ENDIF
+      CLOSE_USE=CONTACT_CLOSING
+      IF (ISOLO.EQ.2) CLOSE_USE=DABS(CONTACT_CLOSING)
       IF (CONTACT_GAP_RATIO.LT.CONTACT_APPROACH_RATIO.AND.
-     &CONTACT_CLOSING.GT.0.0D0) THEN
+     &CLOSE_USE.GT.0.0D0) THEN
       CONTACT_DTD_LIMIT=CONTACT_STEP_SAFETY*CONTACT_DMIN/
-     &CONTACT_CLOSING
+     &CLOSE_USE
       ENDIF
       ENDIF
       IF (ILS.EQ.1) THEN   
@@ -1249,12 +1487,35 @@ C     the much smaller satellite without altering the evolution equations.
       CFL_DTD=0.05D0*HMIN_MULTI/DMAX1(VMAX,1.0D-12)
       DTD=DMIN1(DTD,CFL_DTD)
       ENDIF
-      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL.OR.
+     &(BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT.AND.NCOMP.EQ.1)) THEN
       DTD=DMIN1(DTD,CONTACT_DTD_LIMIT)
       IF (CONTACT_RETRY_ACTIVE) THEN
       DTD=DMIN1(DTD,CONTACT_RETRY_DTD)
       CONTACT_RETRY_ACTIVE=.FALSE.
       ENDIF
+      ENDIF
+C=======================================================================
+C     TIME-STEP FLOOR.
+C
+C     ADFD limits the Bernoulli potential increment, not the time
+C     increment, so a diverging surface speed drives DTD to zero while the
+C     solution keeps marching.  Left alone the run grinds on at a frozen
+C     clock until DTIME+DTD underflows.  Stop on the last state that still
+C     advances time, and say why.
+C=======================================================================
+      IF (DTD.LE.DT_FLOOR.OR.DTIME+DTD.LE.DTIME) THEN
+      OPEN(UNIT=337,FILE='TIMESTEP_FLOOR.dat',STATUS='REPLACE')
+      WRITE(337,*)'# CLOCK STOPPED ADVANCING'
+      WRITE(337,*)'# TIME STEP POST_STEP',DTIME,K-1,POST_STEPS
+      WRITE(337,*)'# DTD FLOOR',DTD,DT_FLOOR
+      WRITE(337,*)'# VMAX HALF_VSQ',VMAX,0.5D0*VMAX**2
+      WRITE(337,*)'# TOPOLOGY NCOMP',BUBBLE_TOPOLOGY,NCOMP
+      WRITE(337,*)'# VOLUME CENTROID',VOLT,CEN
+      CLOSE(337)
+      WRITE(*,*)'TIME STEP BELOW FLOOR AT T=',DTIME,' DTD=',DTD
+      WRITE(*,*)'VMAX=',VMAX,' THE CLOCK IS NO LONGER ADVANCING'
+      STOP
       ENDIF
       DTIME=DTIME+DTD
       WRITE(12,161)DTIME
@@ -1455,9 +1716,18 @@ C
 C     Do not pass an intersected predictor to the BEM and do not accept an
 C     intersected corrector.  Restore the last accepted state and retry the
 C     complete Heun step with half the attempted increment.
-      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      ITRIAL=0
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) ITRIAL=1
+      IF (BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT.AND.NCOMP.EQ.1)
+     &ITRIAL=2
+      IF (ITRIAL.NE.0) THEN
+      IF (ITRIAL.EQ.1) THEN
       CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
      &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
+      ELSE
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,M,IFAIL)
+      ENDIF
       IF (IFAIL.NE.0) THEN
       WRITE(*,*)'FAILED TO BUILD TRIAL TOROIDAL CONTACT GEOMETRY'
       STOP
@@ -1487,14 +1757,25 @@ C     complete Heun step with half the attempted increment.
  1710 CONTINUE
       DTIME=DTIME-DTD_TRIAL
       IF (ILS.EQ.2) MTE=MTE-1
+      IF (ITRIAL.EQ.1) THEN
       CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
      &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
+      ELSE
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,M,IFAIL)
+      ENDIF
       IF (IFAIL.NE.0) THEN
       WRITE(*,*)'FAILED TO RESTORE PRECONTACT TOROIDAL GEOMETRY'
       STOP
       ENDIF
+      IF (ITRIAL.EQ.1) THEN
       CALL FINDVOL(DL,VOLT,M)
       CALL FINDCEN(DL,CEN,M)
+      ELSE
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,
+     &CCOMP,VOLT,CEN,IFAIL)
+      IF (IFAIL.NE.0) STOP
+      ENDIF
       CONTACT_RETRY_DTD=0.5D0*DTD_TRIAL
       CONTACT_RETRY_ACTIVE=.TRUE.
       CONTACT_RETRY_COUNT=CONTACT_RETRY_COUNT+1
@@ -1733,6 +2014,67 @@ C *** collocation points at the mid of the equal sized cubic spline elements  **
       CALL CUBSPLZ (Z,DL,AZ,BZ,CZ,DZ,M)
       CALL CUSPRR (DL,AR,BR,CR,DR,RR,M)
       CALL CUSPZZ (DL,AZ,BZ,CZ,DZ,ZZ,M)
+      ENDIF
+C=======================================================================
+C     DAUGHTER SMOOTHING.
+C
+C     The pre-impact bubble is filtered every NMTE steps by the five-point
+C     (-1,4,10,4,-1)/16 operator above, which annihilates the two-panel
+C     mode exactly and leaves long waves untouched.  The daughters were
+C     never given the same treatment, so short-wavelength wrinkles on them
+C     survive, sharpen, and drive the fast local events that dominate the
+C     step size.  The same filter is applied here, on the periodic index
+C     of each closed loop rather than the mirrored open contour, to the
+C     nodes and to the panel-centre potential together.
+C
+C     The filter is very slightly contractive, so each loop is then
+C     rescaled about its own centroid to put its volume back: r about the
+C     axis and z about the centroid height, which scales an axisymmetric
+C     volume by the cube of the factor.  Both the raw change and the
+C     factor are recorded so the correction stays visible.
+C=======================================================================
+      IF (BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT.AND.NSMOOTH.GT.0.AND.
+     &MOD(MTE,NSMOOTH).EQ.0) THEN
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VSMBEF,
+     &CSMBEF,VOLSMB,CENSMB,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO MEASURE VOLUME BEFORE SMOOTHING'
+      STOP
+      ENDIF
+      CALL SMOOTH_DAUGHTER_LOOPS(R,Z,FID,NCOMP,ISTART,IEND,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO SMOOTH DAUGHTER LOOPS',IFAIL
+      STOP
+      ENDIF
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO REBUILD GEOMETRY AFTER SMOOTHING',IFAIL
+      STOP
+      ENDIF
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,CCOMP,
+     &VOLT,CEN,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'INVALID DAUGHTER VOLUME AFTER SMOOTHING'
+      STOP
+      ENDIF
+      DO 3455 IC=1,NCOMP
+      SMREL=(VCOMP(IC)-VSMBEF(IC))/VSMBEF(IC)
+      SMSCL=(VSMBEF(IC)/VCOMP(IC))**(1.0D0/3.0D0)
+      WRITE(338,*)K-1,POST_STEPS,DTIME,IC,VSMBEF(IC),VCOMP(IC),
+     &SMREL,SMSCL,VMAX
+      DO 3454 J=ISTART(IC),IEND(IC)
+      R(J)=SMSCL*R(J)
+      Z(J)=CCOMP(IC)+SMSCL*(Z(J)-CCOMP(IC))
+ 3454 CONTINUE
+ 3455 CONTINUE
+      CALL FLUSH(338)
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO REBUILD GEOMETRY AFTER RESCALE',IFAIL
+      STOP
+      ENDIF
       ENDIF
  3457 CONTINUE
 C *** Calculating of the volume and centroid of the bubble(s) ***
@@ -2234,7 +2576,9 @@ C	Dawoodian
      &REBOUND_MIN_VOLUME/VOLI,REBOUND_FIRST_POSITIVE_STEP,NRELOC,
      &MAX_Q_RECOMP_ALL
       CALL FLUSH(324)
-      STOP
+      IF (.NOT.SECOND_SPLIT_RESTART) STOP
+      STOP_AFTER_REBOUND=.FALSE.
+      WRITE(*,*)'CONTINUING PAST THE FIRST REBOUND MINIMUM'
       ENDIF
 
 C=======================================================================
@@ -2856,6 +3200,419 @@ C     current cubic meridian by integrating v_vr dot dl on every panel.
       QVRN(J+1)=QVR(J)+DPHI2
    10 CONTINUE
       IFAIL=0
+      RETURN
+      END
+
+C=======================================================================
+C     MINIMUM DISTANCE BETWEEN TWO COMPONENTS.
+C
+C     The self-distance check looks inside one loop at a time and so never
+C     sees two separate loops closing on each other.  This scans every
+C     panel of one against every panel of the other; there are no
+C     neighbours to exclude because the panels belong to different loops.
+C=======================================================================
+      SUBROUTINE FIND_INTERCOMPONENT_DISTANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,JS1,JE1,JS2,JE2,DMIN,JAOUT,JBOUT,FAOUT,FBOUT,
+     &RAOUT,ZAOUT,RBOUT,ZBOUT,HLOCAL,IINTERSECT,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,NSUB=12)
+      INTEGER JAOUT,JBOUT,IINTERSECT
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION RS(NPA,0:NSUB),ZS(NPA,0:NSUB)
+      IFAIL=0
+      IINTERSECT=0
+      DO 20 J=JS1,JE2
+      DO 10 L=0,NSUB
+      FRAC=DBLE(L)/DBLE(NSUB)
+      CALL EVALUATE_SPLINE_PANEL(FRAC,J,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RS(J,L),ZS(J,L),RD,ZD,RDD,ZDD)
+   10 CONTINUE
+   20 CONTINUE
+      DMIN=1.0D100
+      JAOUT=0
+      JBOUT=0
+      DO 60 JA=JS1,JE1
+      DO 50 JB=JS2,JE2
+      DO 40 IA=0,NSUB-1
+      DO 30 IB=0,NSUB-1
+      CALL LINE_SEGMENT_SEPARATION(RS(JA,IA),ZS(JA,IA),
+     &RS(JA,IA+1),ZS(JA,IA+1),RS(JB,IB),ZS(JB,IB),
+     &RS(JB,IB+1),ZS(JB,IB+1),DD,AA,BB,ISEG)
+      IF (DD.LT.DMIN) THEN
+      DMIN=DD
+      JAOUT=JA
+      JBOUT=JB
+      FAOUT=(DBLE(IA)+AA)/DBLE(NSUB)
+      FBOUT=(DBLE(IB)+BB)/DBLE(NSUB)
+      IF (ISEG.NE.0) IINTERSECT=1
+      ENDIF
+   30 CONTINUE
+   40 CONTINUE
+   50 CONTINUE
+   60 CONTINUE
+      IF (JAOUT.EQ.0.OR.JBOUT.EQ.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      CALL REFINE_SPLINE_CLOSEST(JAOUT,JBOUT,FAOUT,FBOUT,DL,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,DMIN,RAOUT,ZAOUT,RBOUT,ZBOUT)
+      HA=DL(JAOUT+1)-DL(JAOUT)
+      HB=DL(JBOUT+1)-DL(JBOUT)
+      HLOCAL=0.5D0*(HA+HB)
+      IF (HLOCAL.LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      RETURN
+      END
+
+C=======================================================================
+C     UNWRAPPED TOTAL POTENTIAL ON ONE CLOSED COMPONENT.
+C
+C     The total potential is multivalued: it gains GAMMA once per circuit.
+C     Subtracting the linear ramp GAMMA*s/L leaves a genuinely periodic
+C     function, which is splined here and evaluated at any arc length; the
+C     ramp and the circuit count are added back on the way out.
+C=======================================================================
+      SUBROUTINE COMPONENT_PHI_EVAL(SU,JS,JE,DL,QNODE,APH,BPH,CPH,DPH,
+     &XPH,GAMMA,PHI,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),QNODE(NPA)
+      DIMENSION APH(NPA),BPH(NPA),CPH(NPA),DPH(NPA),XPH(NPA)
+      IFAIL=0
+      NC=JE-JS+1
+      S0=DL(JS)
+      PERIOD=DL(JE+1)-S0
+      IF (PERIOD.LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      S=SU-S0
+      NWRAP=0
+   10 IF (S.GE.PERIOD) THEN
+      S=S-PERIOD
+      NWRAP=NWRAP+1
+      GO TO 10
+      ENDIF
+   20 IF (S.LT.0.0D0) THEN
+      S=S+PERIOD
+      NWRAP=NWRAP-1
+      GO TO 20
+      ENDIF
+      KP=NC
+      DO 30 K=1,NC
+      IF (S.GE.XPH(K).AND.S.LT.XPH(K+1)) THEN
+      KP=K
+      GO TO 40
+      ENDIF
+   30 CONTINUE
+   40 DS=S-XPH(KP)
+      PSIV=APH(KP)+BPH(KP)*DS+CPH(KP)*DS**2+DPH(KP)*DS**3
+      PHI=PSIV+GAMMA*S/PERIOD+DBLE(NWRAP)*GAMMA
+      RETURN
+      END
+
+C=======================================================================
+C     COALESCENCE OF TWO COMPONENTS INTO ONE.
+C
+C     This is the split surgery run backwards.  A half panel is trimmed
+C     from each loop on either side of the contact, and the four exposed
+C     ends are bridged so that the two closed loops become one closed loop
+C     enclosing both interiors.  Which way the second loop must be walked
+C     depends on how the two are oriented where they meet, so both are
+C     built and the one whose signed area matches the sum of the two
+C     originals is kept - a wrong pairing gives a figure of eight, whose
+C     area is the difference instead.
+C
+C     Potential is carried across unwrapped and made continuous at the
+C     first bridge, which leaves exactly GAMMA1+GAMMA2 around the merged
+C     loop, so Kelvin's theorem holds through the merge just as it does
+C     through the split.
+C=======================================================================
+      SUBROUTINE MERGE_TWO_COMPONENTS(R,Z,RR,ZZ,FID,PSI,DL,DLM,
+     &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,
+     &QVR,QVRN,QREM,QREMN,QTOTAL,MCOMP,ISTART,IEND,COMP_OF_PANEL,
+     &NEXT_NODE,AVRD,CVRD,GAMMAD,JA,FA,JB,FB,MMERGE,
+     &MNEW,GAMMERGE,VOLBEF,VOLAFT,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2,MAXVR=2)
+      INTEGER COMP_OF_PANEL(NPA),NEXT_NODE(NPA)
+      DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),FID(NPA),PSI(NPA)
+      DIMENSION DL(NPA),DLM(NPA)
+      DIMENSION AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      DIMENSION AFI(NPA),BFI(NPA),CFI(NPA),DFI(NPA)
+      DIMENSION QVR(NPA),QVRN(NPA),QREM(NPA),QREMN(NPA),QTOTAL(NPA)
+      DIMENSION MCOMP(MAXCOMP),ISTART(MAXCOMP),IEND(MAXCOMP)
+      DIMENSION AVRD(MAXVR),CVRD(MAXVR),GAMMAD(MAXVR)
+      DIMENSION QOLDN(NPA)
+      DIMENSION XP1(NPA),AP1(NPA),BP1(NPA),CP1(NPA),DP1(NPA)
+      DIMENSION XP2(NPA),AP2(NPA),BP2(NPA),CP2(NPA),DP2(NPA)
+      DIMENSION YL(NPA),XL(NPA)
+      DIMENSION RM(NPA),ZM(NPA),QM(NPA)
+      DIMENSION RB(NPA),ZB(NPA),QB(NPA)
+      DIMENSION QVRJ(MAXCOMP),VCM(MAXCOMP),CCM(MAXCOMP)
+      INTEGER JA,JB
+C     L1 and L2 fall in the implicit-integer range, as LDOM and LSAT do
+C     in the split routine, so they are declared explicitly here too.
+      DOUBLE PRECISION L1,L2
+      IFAIL=0
+      JS1=ISTART(1)
+      JE1=IEND(1)
+      JS2=ISTART(2)
+      JE2=IEND(2)
+      N1=JE1-JS1+1
+      N2=JE2-JS2+1
+      L1=DL(JE1+1)-DL(JS1)
+      L2=DL(JE2+1)-DL(JS2)
+      IF (L1.LE.0.0D0.OR.L2.LE.0.0D0.OR.MMERGE.GT.NPA-4) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+C     Total potential at the nodes of both loops.
+      DO 10 J=JS1,JE2
+      QOLDN(J)=QREMN(J)+QVRN(J)
+   10 CONTINUE
+C     Periodic part of each loop's potential, splined on node arc length.
+      DO 20 K=1,N1
+      J=JS1+K-1
+      XL(K)=DL(J)-DL(JS1)
+      YL(K)=QOLDN(J)-GAMMAD(1)*XL(K)/L1
+   20 CONTINUE
+      XL(N1+1)=L1
+      YL(N1+1)=YL(1)
+      CALL PERIODIC_SPLINE_NODES(YL,XL,AP1,BP1,CP1,DP1,N1,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+      DO 25 K=1,N1+1
+      XP1(K)=XL(K)
+   25 CONTINUE
+      DO 30 K=1,N2
+      J=JS2+K-1
+      XL(K)=DL(J)-DL(JS2)
+      YL(K)=QOLDN(J)-GAMMAD(2)*XL(K)/L2
+   30 CONTINUE
+      XL(N2+1)=L2
+      YL(N2+1)=YL(1)
+      CALL PERIODIC_SPLINE_NODES(YL,XL,AP2,BP2,CP2,DP2,N2,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=3
+      RETURN
+      ENDIF
+      DO 35 K=1,N2+1
+      XP2(K)=XL(K)
+   35 CONTINUE
+      SA=DL(JA)+FA*(DL(JA+1)-DL(JA))
+      SB=DL(JB)+FB*(DL(JB+1)-DL(JB))
+      HT1=0.5D0*L1/DBLE(N1)
+      HT2=0.5D0*L2/DBLE(N2)
+C     Panels are shared out between the two arcs in proportion to length.
+      NM1=NINT(DBLE(MMERGE)*(L1-2.0D0*HT1)/
+     &((L1-2.0D0*HT1)+(L2-2.0D0*HT2)))
+      IF (NM1.LT.4) NM1=4
+      IF (NM1.GT.MMERGE-4) NM1=MMERGE-4
+      NM2=MMERGE-NM1
+      CALL POLYGON_SIGNED_AREA_NODES(R,Z,JS1,JE1,AREA1)
+      CALL POLYGON_SIGNED_AREA_NODES(R,Z,JS2,JE2,AREA2)
+      VOLBEF=0.0D0
+      IBEST=0
+      DO 100 IDIR=1,2
+      SGN=1.0D0
+      IF (IDIR.EQ.2) SGN=-1.0D0
+C     First arc: all of loop one except the trimmed piece at the contact.
+      DO 40 K=1,NM1
+      SU=SA+HT1+(L1-2.0D0*HT1)*DBLE(K-1)/DBLE(NM1-1)
+      CALL EVALUATE_LOOP_POINT(SU,JS1,JE1,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RM(K),ZM(K),IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=4
+      RETURN
+      ENDIF
+      CALL COMPONENT_PHI_EVAL(SU,JS1,JE1,DL,QOLDN,AP1,BP1,CP1,DP1,
+     &XP1,GAMMAD(1),QM(K),IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=5
+      RETURN
+      ENDIF
+   40 CONTINUE
+C     Second arc, walked in whichever direction is under test.
+      DO 50 K=1,NM2
+      SU=SB+SGN*(HT2+(L2-2.0D0*HT2)*DBLE(K-1)/DBLE(NM2-1))
+      CALL EVALUATE_LOOP_POINT(SU,JS2,JE2,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RM(NM1+K),ZM(NM1+K),IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=6
+      RETURN
+      ENDIF
+      CALL COMPONENT_PHI_EVAL(SU,JS2,JE2,DL,QOLDN,AP2,BP2,CP2,DP2,
+     &XP2,GAMMAD(2),QM(NM1+K),IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=7
+      RETURN
+      ENDIF
+   50 CONTINUE
+      CALL POLYGON_SIGNED_AREA_LIST(RM,ZM,MMERGE,AREAM)
+      TARGET=AREA1+AREA2
+      IF (DABS(AREAM-TARGET).LT.0.25D0*DABS(TARGET)) THEN
+      IBEST=IDIR
+      DO 60 K=1,MMERGE
+      RB(K)=RM(K)
+      ZB(K)=ZM(K)
+      QB(K)=QM(K)
+   60 CONTINUE
+      VOLBEF=TARGET
+      GO TO 110
+      ENDIF
+  100 CONTINUE
+  110 IF (IBEST.EQ.0) THEN
+      IFAIL=8
+      RETURN
+      ENDIF
+C     Make the potential continuous across the first bridge.  The jump
+C     left at the second bridge is then GAMMA1+GAMMA2 by construction.
+      OFFSET=QB(NM1)-QB(NM1+1)
+      DO 120 K=NM1+1,MMERGE
+      QB(K)=QB(K)+OFFSET
+  120 CONTINUE
+      GAMMERGE=QB(MMERGE)-QB(1)
+      DO 130 K=1,MMERGE
+      R(K)=RB(K)
+      Z(K)=ZB(K)
+      QOLDN(K)=QB(K)
+  130 CONTINUE
+      MNEW=MMERGE
+      R(MNEW+1)=R(1)
+      Z(MNEW+1)=Z(1)
+      MCOMP(1)=MMERGE
+      MCOMP(2)=0
+      ISTART(1)=1
+      IEND(1)=MMERGE
+      ISTART(2)=0
+      IEND(2)=0
+      DO 140 J=1,MNEW
+      COMP_OF_PANEL(J)=1
+      NEXT_NODE(J)=J+1
+  140 CONTINUE
+      NEXT_NODE(MNEW)=1
+      DO 150 J=MNEW+1,NPA
+      COMP_OF_PANEL(J)=0
+      NEXT_NODE(J)=0
+  150 CONTINUE
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,1,ISTART,IEND,MNEW,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=9
+      RETURN
+      ENDIF
+      GAMMAD(1)=GAMMERGE
+      GAMMAD(2)=0.0D0
+      CALL FIND_COMPONENT_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ISTART(1),IEND(1),AVRD(1),CVRD(1),
+     &RDM,HDM,RET,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=10
+      RETURN
+      ENDIF
+      AVRD(2)=0.0D0
+      CVRD(2)=0.0D0
+      CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVRD,CVRD,GAMMAD,1,1,ISTART,IEND,QVR,QVRN,QVRJ,MNEW,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=11
+      RETURN
+      ENDIF
+      DO 160 J=1,MNEW
+      QREMN(J)=QOLDN(J)-QVRN(J)
+  160 CONTINUE
+      QREMN(MNEW+1)=QREMN(1)
+      QVRN(MNEW+1)=QVRN(1)
+      CALL BUILD_COMPONENT_NODE_FIELD_TO_CENTERS(QREMN,DL,DLM,FID,
+     &AFI,BFI,CFI,DFI,1,ISTART,IEND,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=12
+      RETURN
+      ENDIF
+      DO 170 J=1,MNEW
+      QREM(J)=FID(J)
+      QTOTAL(J)=FID(J)+QVR(J)
+      PSI(J)=0.0D0
+  170 CONTINUE
+      CALL FIND_COMPONENT_VOLUMES(DL,1,ISTART,IEND,VCM,CCM,
+     &VOLAFT,CENAFT,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=13
+      RETURN
+      ENDIF
+      RETURN
+      END
+
+C     Position on one closed loop at an arbitrary arc length.
+      SUBROUTINE EVALUATE_LOOP_POINT(SU,JS,JE,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RP,ZP,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION DL(NPA),AR(NPA),BR(NPA),CR(NPA),DR(NPA)
+      DIMENSION AZ(NPA),BZ(NPA),CZ(NPA),DZ(NPA)
+      IFAIL=0
+      S0=DL(JS)
+      PERIOD=DL(JE+1)-S0
+      IF (PERIOD.LE.0.0D0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      S=SU-S0
+   10 IF (S.GE.PERIOD) THEN
+      S=S-PERIOD
+      GO TO 10
+      ENDIF
+   20 IF (S.LT.0.0D0) THEN
+      S=S+PERIOD
+      GO TO 20
+      ENDIF
+      S=S+S0
+      JP=JE
+      DO 30 J=JS,JE
+      IF (S.GE.DL(J).AND.S.LT.DL(J+1)) THEN
+      JP=J
+      GO TO 40
+      ENDIF
+   30 CONTINUE
+   40 DS=S-DL(JP)
+      RP=AR(JP)+BR(JP)*DS+CR(JP)*DS**2+DR(JP)*DS**3
+      ZP=AZ(JP)+BZ(JP)*DS+CZ(JP)*DS**2+DZ(JP)*DS**3
+      IF (RP.LE.0.0D0.OR.ZP.LE.0.0D0) IFAIL=2
+      RETURN
+      END
+
+C     Signed area of a closed node loop held in the global arrays.
+      SUBROUTINE POLYGON_SIGNED_AREA_NODES(R,Z,JS,JE,AREA)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA)
+      AREA=0.0D0
+      DO 10 J=JS,JE
+      JN=J+1
+      IF (JN.GT.JE) JN=JS
+      AREA=AREA+0.5D0*(R(J)*Z(JN)-R(JN)*Z(J))
+   10 CONTINUE
+      RETURN
+      END
+
+C     Signed area of a closed loop held in a standalone list.
+      SUBROUTINE POLYGON_SIGNED_AREA_LIST(RL,ZL,N,AREA)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION RL(NPA),ZL(NPA)
+      AREA=0.0D0
+      DO 10 K=1,N
+      KN=K+1
+      IF (KN.GT.N) KN=1
+      AREA=AREA+0.5D0*(RL(K)*ZL(KN)-RL(KN)*ZL(K))
+   10 CONTINUE
       RETURN
       END
 
@@ -3642,11 +4399,16 @@ C     then packed into the one globally coupled BEM source list.
       SUBROUTINE INITIALIZE_DAUGHTER_SPLIT(FILENAME,R,Z,RR,ZZ,FID,PSI,
      &DL,DLM,AR,BR,CR,DR,AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,
      &QVR,QVRN,QREM,QREMN,QTOTAL,MOLD,MNEW,NCOMP,MCOMP,ISTART,IEND,
-     &COMP_OF_PANEL,NEXT_NODE,AVRD,CVRD,GAMMAD,GAMMA_PARENT,
+     &COMP_OF_PANEL,NEXT_NODE,AVRD,CVRD,GAMMAD,GAMMA_PARENT,KRES,
+     &NPRES,
      &SPLIT_TIME,VOLBEF,CENBEF,DVDT,VOLAFT,CENAFT,VCOMP,CCOMP,
      &QRECOMP,QCLOSURE,MESHRATIO,RDMIN,RETA,IFAIL)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NPA=600,MAXCOMP=2,MAXVR=2)
+C     A daughter holding at most this share of the volume at the split is
+C     small enough to be dropped straight away.  Anything larger is a real
+C     part of the flow and is kept and evolved as a second component.
+      PARAMETER (DISCARD_FRACTION=0.01D0)
       CHARACTER*(*) FILENAME
       CHARACTER*256 LINE
       INTEGER MCOMP(MAXCOMP),ISTART(MAXCOMP),IEND(MAXCOMP)
@@ -3673,6 +4435,8 @@ C     then packed into the one globally coupled BEM source list.
       DIMENSION QVR0(NPA),QVRN0(NPA),QOLDN(NPA),QVRJUMP(MAXCOMP)
       IFAIL=0
       NREAD=0
+      KRES=0
+      NPRES=0
       SPLIT_TIME=-1.0D0
       VOLBEF=-1.0D0
       CENBEF=0.0D0
@@ -3690,6 +4454,10 @@ C     then packed into the one globally coupled BEM source list.
       IF (IOS.NE.0) GO TO 30
       IP=INDEX(LINE,'# TIME')
       IF (IP.GT.0) READ(LINE(IP+6:),*,IOSTAT=IOS2) SPLIT_TIME
+      IP=INDEX(LINE,'# PANEL_COUNT')
+      IF (IP.GT.0) READ(LINE(IP+13:),*,IOSTAT=IOS2) MOLD
+      IP=INDEX(LINE,'# ACCEPTED_STEP POST_STEP')
+      IF (IP.GT.0) READ(LINE(IP+25:),*,IOSTAT=IOS2) KRES,NPRES
       IP=INDEX(LINE,'# CONTACT_PANELS')
       IF (IP.GT.0) READ(LINE(IP+16:),*,IOSTAT=IOS2) JA,JB
       IP=INDEX(LINE,'# CONTACT_FRACTIONS')
@@ -3880,6 +4648,52 @@ C     precontact 1.1E-6 gap.
       RETURN
       ENDIF
    70 CONTINUE
+C=======================================================================
+C     WHAT BECOMES OF THE SMALLER DAUGHTER.
+C
+C     Both loops are measured here, while they still exist, and the
+C     smaller one is dropped only if it is genuinely small.  A small
+C     satellite is not worth carrying: its short panels set the global
+C     CFL limit and collapse the step, and it reaches its own unresolved
+C     reconnection within a few steps.  A daughter of comparable size is
+C     a real part of the flow and is kept, so the run continues with two
+C     components.
+C
+C     The decision is made here, before the ring potential is removed
+C     from the surface data, because that ordering matters: a discarded
+C     loop takes its vortex ring with it, so only the rings that survive
+C     may be subtracted.  Dropping a loop after QREM was formed would
+C     leave the retained surface carrying the potential of a ring that no
+C     longer has a source.  It also keeps every later step, including the
+C     component splines, off a loop that is about to be discarded.
+C
+C     When a loop is dropped the routine returns NCOMP=1 and leaves the
+C     discarded loop's bookkeeping in slot 2 so the caller can report it.
+C     When both are kept it returns NCOMP=2 and slot 2 is a live
+C     component.
+C=======================================================================
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,CCOMP,
+     &VBOTH,CBOTH,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=33
+      RETURN
+      ENDIF
+C     The loop that encloses less volume is the one discarded.  The
+C     surgery names the loops from their arc lengths, and a long thin arc
+C     can enclose less than a short fat one, so the choice is made on the
+C     volumes just measured rather than on that naming.
+      IDROP=2
+      IF (VCOMP(2).GE.VCOMP(1)) IDROP=1
+      IKEEP=3-IDROP
+      VSATKEEP=VCOMP(IDROP)
+      CSATKEEP=CCOMP(IDROP)
+      GSATKEEP=GAMMAD(IDROP)
+      MSATKEEP=MCOMP(IDROP)
+      SMALLFRAC=VCOMP(IDROP)/VBOTH
+      IF (SMALLFRAC.GT.DISCARD_FRACTION) THEN
+C     Comparable daughters: keep both and evolve them.
+      WRITE(*,*)'BOTH DAUGHTERS KEPT: SMALLER FRACTION=',SMALLFRAC,
+     &' LIMIT=',DISCARD_FRACTION
       CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
      &AVRD,CVRD,GAMMAD,2,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,
      &MNEW,IERR)
@@ -3887,6 +4701,57 @@ C     precontact 1.1E-6 gap.
       IFAIL=25
       RETURN
       ENDIF
+      GO TO 74
+      ENDIF
+      WRITE(*,*)'SMALLER DAUGHTER DROPPED: FRACTION=',SMALLFRAC,
+     &' LIMIT=',DISCARD_FRACTION
+      IF (IKEEP.EQ.2) THEN
+      DO 71 K=1,MCOMP(2)
+      J=ISTART(2)+K-1
+      R(K)=R(J)
+      Z(K)=Z(J)
+      QOLDN(K)=QOLDN(J)
+   71 CONTINUE
+      MCOMP(1)=MCOMP(2)
+      AVRD(1)=AVRD(2)
+      CVRD(1)=CVRD(2)
+      GAMMAD(1)=GAMMAD(2)
+      RDMIN(1)=RDMIN(2)
+      RETA(1)=RETA(2)
+      VCOMP(1)=VCOMP(2)
+      CCOMP(1)=CCOMP(2)
+      ENDIF
+      NCOMP=1
+      ISTART(1)=1
+      IEND(1)=MCOMP(1)
+      MNEW=IEND(1)
+      DO 72 J=1,MNEW
+      COMP_OF_PANEL(J)=1
+      NEXT_NODE(J)=J+1
+   72 CONTINUE
+      NEXT_NODE(MNEW)=1
+      DO 73 J=MNEW+1,NPA
+      COMP_OF_PANEL(J)=0
+      NEXT_NODE(J)=0
+   73 CONTINUE
+C     Only the moved loop needs its arc length and splines re-derived;
+C     a retained first loop already carries a standalone parameterisation.
+      IF (IKEEP.EQ.2) THEN
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,MNEW,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=34
+      RETURN
+      ENDIF
+      ENDIF
+      CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
+     &AVRD,CVRD,GAMMAD,1,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,
+     &MNEW,IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=25
+      RETURN
+      ENDIF
+   74 CONTINUE
       DO 80 IC=1,NCOMP
       QRECOMP(IC)=0.0D0
       QCLOSURE(IC)=DABS(GAMMAD(IC)-QVRJUMP(IC))
@@ -3950,7 +4815,7 @@ C     smoothing.  This removes the short tip panels before the first BEM.
       RETURN
       ENDIF
       CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
-     &AVRD,CVRD,GAMMAD,2,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,
+     &AVRD,CVRD,GAMMAD,NCOMP,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,
      &MNEW,IERR)
       IF (IERR.NE.0) THEN
       IFAIL=32
@@ -3966,6 +4831,12 @@ C     smoothing.  This removes the short tip panels before the first BEM.
       IF (IERR.NE.0) THEN
       IFAIL=27
       RETURN
+      ENDIF
+      IF (NCOMP.EQ.1) THEN
+      VCOMP(2)=VSATKEEP
+      CCOMP(2)=CSATKEEP
+      GAMMAD(2)=GSATKEEP
+      MCOMP(2)=MSATKEEP
       ENDIF
       DO 100 IC=1,NCOMP
       CALL COMPONENT_MESH_QUALITY(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
@@ -4706,6 +5577,7 @@ C     Endpoint 4 projected onto segment 1--2.
       WRITE(IUNIT,*)'# FULL-PRECISION VALID PRECONTACT CHECKPOINT'
       WRITE(IUNIT,*)'# ACCEPTED_STEP POST_STEP',ISTEP,IPOST
       WRITE(IUNIT,*)'# TIME',TIME
+      WRITE(IUNIT,*)'# PANEL_COUNT',M
       WRITE(IUNIT,*)'# CONTACT_PANELS',JA,JB
       WRITE(IUNIT,*)'# CONTACT_FRACTIONS',FA,FB
       WRITE(IUNIT,*)'# SIDE_A',RA,ZA,QA,QREMA,QVRA
@@ -5737,6 +6609,56 @@ C
  300  RETURN
       END
 C***********************************************************************
+C     Five-point (-1,4,10,4,-1)/16 filter on the periodic index of each
+C     closed daughter loop.  Nodes and the panel-centre potential are
+C     filtered together so the surface and the field it carries stay
+C     consistent.  The two-panel mode is removed exactly; a wave four
+C     panels long is kept at three quarters; long waves are untouched.
+      SUBROUTINE SMOOTH_DAUGHTER_LOOPS(R,Z,FID,NCOMP,ISTART,IEND,
+     &IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600,MAXCOMP=2)
+      DIMENSION R(NPA),Z(NPA),FID(NPA)
+      DIMENSION ISTART(MAXCOMP),IEND(MAXCOMP)
+      DIMENSION RS(NPA),ZS(NPA),FS(NPA)
+      IFAIL=0
+      DO 30 IC=1,NCOMP
+      JS=ISTART(IC)
+      JE=IEND(IC)
+      NC=JE-JS+1
+      IF (NC.LT.8) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 10 KK=1,NC
+      KM2=MOD(KK-3+2*NC,NC)+1
+      KM1=MOD(KK-2+2*NC,NC)+1
+      KP1=MOD(KK,NC)+1
+      KP2=MOD(KK+1,NC)+1
+      RS(KK)=(-R(JS+KM2-1)+4.0D0*R(JS+KM1-1)+10.0D0*R(JS+KK-1)
+     &+4.0D0*R(JS+KP1-1)-R(JS+KP2-1))/16.0D0
+      ZS(KK)=(-Z(JS+KM2-1)+4.0D0*Z(JS+KM1-1)+10.0D0*Z(JS+KK-1)
+     &+4.0D0*Z(JS+KP1-1)-Z(JS+KP2-1))/16.0D0
+      FS(KK)=(-FID(JS+KM2-1)+4.0D0*FID(JS+KM1-1)
+     &+10.0D0*FID(JS+KK-1)+4.0D0*FID(JS+KP1-1)
+     &-FID(JS+KP2-1))/16.0D0
+   10 CONTINUE
+      DO 20 KK=1,NC
+      J=JS+KK-1
+      IF (RS(KK).LE.0.0D0.OR.ZS(KK).LE.0.0D0) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+      R(J)=RS(KK)
+      Z(J)=ZS(KK)
+      FID(J)=FS(KK)
+   20 CONTINUE
+      R(JE+1)=R(JS)
+      Z(JE+1)=Z(JS)
+   30 CONTINUE
+      RETURN
+      END
+
       SUBROUTINE SMOOTH(R,Z,FID,R2R,Z2Z,FI2FI,M)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NPA=600)
