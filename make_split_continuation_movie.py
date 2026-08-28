@@ -9,6 +9,7 @@ the retained daughter on to its next contact.
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from pathlib import Path
@@ -47,7 +48,7 @@ MAXU_LIMIT = 1.0e4
 # alone - so those states are banded, and the run is cut at VOLUME_LIMIT rather
 # than showing a balloon that means nothing.
 VOLUME_TRUST = 0.28
-VOLUME_LIMIT = 0.45
+VOLUME_LIMIT = 12.5
 
 # Beyond this share of the parent circulation, discarding a daughter is no
 # longer a small correction and the generation is flagged on screen.
@@ -61,6 +62,9 @@ _aspect = (MAIN[2] - MAIN[0]) / (MAIN[3] - MAIN[1])
 _rspan = (VIEW_Z[1] - VIEW_Z[0]) * _aspect
 VIEW_R = (-_rspan / 2, _rspan / 2)
 INSET_R, INSET_Z = (-1.45, 1.45), (-0.1, 2.8)
+# Clearance kept between a contour and the edge of the main panel once the
+# camera has to widen past the fixed window.
+VIEW_PAD = 0.12
 
 V0 = 4.1887902047863905    # 4/3 pi: the initial bubble volume in R0 units
 
@@ -336,6 +340,53 @@ def contour(draw, zones, to_pixels, fill, edge, width=3):
         draw.line(polygon + [polygon[0]], fill=edge, width=width * SS, joint="curve")
 
 
+def nice_ticks(low, high, count=5):
+    """Round tick positions for a view that is no longer the fixed window."""
+    span = high - low
+    if span <= 0.0:
+        return []
+    power = 10.0 ** math.floor(math.log10(span / count))
+    for factor in (1.0, 2.0, 2.5, 5.0, 10.0):
+        step = factor * power
+        if span / count <= step:
+            break
+    value, out = math.ceil(low / step) * step, []
+    while value <= high + 1e-9:
+        out.append(round(value, 10))
+        value += step
+    return out
+
+
+def assign_views(states):
+    """Choose the main panel's window for every state.
+
+    It starts as the fixed window the daughters are followed in and only ever
+    widens, once and for good, when a contour stops fitting inside it.  The
+    window is monotone because zooming back in would read as the bubble
+    shrinking; leaving it fixed instead would let the over-expanded rebound
+    paint straight over the axes and the sidebar.
+    """
+    zlow, zhigh = VIEW_Z
+    for state in states:
+        rmax, low, high = 0.0, zlow, zhigh
+        for zones, _volume, _ring in state["components"]:
+            for zone in zones:
+                for point in zone:
+                    rmax = max(rmax, abs(point[0]))
+                    low = min(low, point[1] - VIEW_PAD)
+                    high = max(high, point[1] + VIEW_PAD)
+        needed = 2.0 * (rmax + VIEW_PAD) / _aspect
+        if high - low < needed:
+            middle = 0.5 * (low + high)
+            low = min(low, middle - needed / 2.0)
+            high = max(high, middle + needed / 2.0)
+        zlow, zhigh = min(zlow, low), max(zhigh, high)
+        half = (zhigh - zlow) * _aspect / 2.0
+        state["view_z"] = (zlow, zhigh)
+        state["view_r"] = (-half, half)
+    return states
+
+
 def ticks(draw, box, xlim, ylim, to_pixels, xvals, yvals, small):
     left, _top, _right, bottom = (value * SS for value in box)
     for value in xvals:
@@ -375,11 +426,14 @@ def render(state, index, count):
     left, top, right, bottom = (value * SS for value in MAIN)
     draw.rounded_rectangle((left, top, right, bottom), radius=12 * SS,
                            fill=PANEL, outline=EDGE, width=2 * SS)
-    to_main = mapper(MAIN, VIEW_R, VIEW_Z)
-    ticks(draw, MAIN, VIEW_R, VIEW_Z, to_main,
-          (-1.0, -0.5, 0.0, 0.5, 1.0),
-          (0.4, 0.8, 1.2, 1.6), small)
-    draw.line((to_main((0.0, VIEW_Z[0])), to_main((0.0, VIEW_Z[1]))),
+    view_r, view_z = state.get("view_r", VIEW_R), state.get("view_z", VIEW_Z)
+    to_main = mapper(MAIN, view_r, view_z)
+    if view_z == VIEW_Z:
+        rvals, zvals = (-1.0, -0.5, 0.0, 0.5, 1.0), (0.4, 0.8, 1.2, 1.6)
+    else:
+        rvals, zvals = nice_ticks(*view_r), nice_ticks(*view_z)
+    ticks(draw, MAIN, view_r, view_z, to_main, rvals, zvals, small)
+    draw.line((to_main((0.0, view_z[0])), to_main((0.0, view_z[1]))),
               fill=(78, 109, 129), width=SS)
 
     # Components are coloured by the volume they enclose, not by their slot: the
@@ -412,7 +466,11 @@ def render(state, index, count):
     draw.ellipse((upper[0], upper[1], lower[0], lower[1]), outline=(46, 74, 94), width=2 * SS)
     draw.text((iright - 10 * SS, itop + 8 * SS), "initial bubble",
               font=small, fill=(74, 104, 124), anchor="ra")
-    corner_a, corner_b = to_inset((VIEW_R[0], VIEW_Z[1])), to_inset((VIEW_R[1], VIEW_Z[0]))
+    corner_a, corner_b = to_inset((view_r[0], view_z[1])), to_inset((view_r[1], view_z[0]))
+    # A widened camera can reach past the inset itself; the marker is clamped so
+    # it never draws outside the panel it belongs to.
+    corner_a = (max(corner_a[0], ileft), max(corner_a[1], itop))
+    corner_b = (min(corner_b[0], iright), min(corner_b[1], ibottom))
     draw.rectangle((corner_a[0], corner_a[1], corner_b[0], corner_b[1]),
                    outline=ACCENT, width=2 * SS)
     draw.text((corner_b[0] + 8 * SS, (corner_a[1] + corner_b[1]) // 2), "view",
@@ -601,7 +659,7 @@ def build_states():
 
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    states = build_states()
+    states = assign_views(build_states())
     print("rendering %d states" % len(states))
 
     writer = imageio_ffmpeg.write_frames(
