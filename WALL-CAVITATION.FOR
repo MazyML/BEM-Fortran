@@ -163,6 +163,20 @@ C     the closure simply takes it in, which is the same event that made
 C     the bubble whole in the first place, happening again a little
 C     further along.
       PARAMETER (AXIS_ABSORB_RADIUS=2.0D-3)
+C     The absolute radius above waits until the neck is twenty times
+C     thinner than a panel, which is far past the point where the panels
+C     either side of it start crossing the axis.  A neck is therefore
+C     also taken when it is thin compared with the panels that have to
+C     resolve it.  The scale is the local panel length, so the test does
+C     not have to be retuned as the bubble changes size: an end that is
+C     healthy leaves the axis radially and puts its neighbour a whole
+C     panel out, while a neck being pinched off sits at a fraction of
+C     one.
+      PARAMETER (AXIS_ABSORB_FRACTION=0.40D0)
+C     A piece this large is not a neck being pinched off, it is a second
+C     component, and deleting it would be discarding a live daughter.
+C     The absorption refuses it and leaves it for a genuine split.
+      PARAMETER (AXIS_ABSORB_MAX_DROP=1.0D-2)
 C     A rebounding torus whose hole has closed is made whole again: the loop
 C     is cut at the hole, the opening trimmed, the two ends laid on the axis
 C     and the ring released, leaving the same simply connected bubble the run
@@ -179,6 +193,30 @@ C     7E-12, so this separates them by more than a decade either way.
       PARAMETER (DT_FLOOR=1.0D-9)
 C     Accepted steps between daughter smoothings.  Zero disables it.
       PARAMETER (NSMOOTH=10)
+C=======================================================================
+C     ENERGY LOSS AT THE COLLAPSE-REBOUND
+C
+C     A boundary-integral bubble carries its surface potential through
+C     the collapse unchanged, so the rebound is driven by every bit of
+C     energy the surface held at the impact, and it over-expands - to
+C     twelve times the volume the parent started from in this case.  The
+C     accepted remedy is a discontinuous jump in the potential applied
+C     at minimum volume, which is where the shock is radiated: Lind and
+C     Phillips, "On the boundary integral method for the rebounding
+C     bubble", J. Fluid Mech. 570, 407 (2007).  Measurements put the
+C     loss at 60 to 70 per cent of the bubble energy per cycle, so
+C     ENERGY_RETAINED is what survives one collapse.
+      PARAMETER (ENERGY_RETAINED=0.35D0)
+C     The jump is also held under the energy the bubble began with.  The
+C     surgeries only ever remove liquid, gas and circulation, so they
+C     cannot leave the surface with more energy than the parent had, and
+C     a rebound that passes V/V0 = 1 has been given energy that was
+C     never in the problem to begin with.
+      DOUBLE PRECISION ENERGY_REF,ENERGY_TKIN,ENERGY_EPOT
+      DOUBLE PRECISION ENERGY_TOTAL,ENERGY_TARGET,ENERGY_LAMBDA
+      DOUBLE PRECISION ENERGY_VCHECK,ENERGY_PGAS,ENERGY_TKEEP
+      DOUBLE PRECISION ENERGY_BEFORE_JUMP
+      DIMENSION PHI_WORK(NPA),PHIN_WORK(NPA)
       DOUBLE PRECISION MAX_Q_RECOMP,MAX_Q_RECOMP_ALL
       DOUBLE PRECISION MAXUVR_OLD,MAXUVR_NEW
       DOUBLE PRECISION MESH_RATIO,MESH_RATIO_BEFORE
@@ -306,6 +344,12 @@ C	OPEN(UNIT=3000,FILE='NOZ.plt')
      &' PANEL_A PANEL_B INTERSECT R_MID Z_MID VMAX'
       OPEN(UNIT=342,FILE='MERGE_DIAG.dat',STATUS='REPLACE')
       WRITE(342,*)'# COALESCENCE EVENTS'
+      OPEN(UNIT=346,FILE='ENERGY_JUMP_DIAG.dat',STATUS='REPLACE')
+      WRITE(346,*)'# EVENT STEP POST_STEP TIME VOLUME TKIN_BEFORE',
+     &' EPOT ETOT_BEFORE ETOT_REF ETOT_AFTER LAMBDA'
+      OPEN(UNIT=347,FILE='ENERGY_TRACE.dat',STATUS='REPLACE')
+      WRITE(347,*)'# STEP POST_STEP TIME VOLUME TKIN EPOT ETOT',
+     &' ETOT_OVER_REF'
       OPEN(UNIT=345,FILE='AXIS_ABSORB_DIAG.dat',STATUS='REPLACE')
       WRITE(345,*)'# EVENT STEP POST_STEP TIME NODE RADIUS PANELS',
      &' VOLUME_BEFORE VOLUME_AFTER VOLUME_DROPPED FRACTION'
@@ -494,6 +538,13 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       CALL FINDVOL (DL,VOLT,M)
       CALL FINDCEN (DL,CEN,M)
       VOLI=VOLT
+C     The energy the parent bubble starts with.  At its maximum radius
+C     it is at rest, so all of it is the work the far field can do on
+C     the cavity plus the internal energy of the gas it contains.  Every
+C     generation of the chain builds this same initial sphere before it
+C     restarts from a checkpoint, so this is the parent's energy in all
+C     of them and serves as the ceiling no surgery may lift.
+      ENERGY_REF=VOLI+EPS*VOLI/(POLYEXP-1.0D0)
       RATIO=VOLT/VOLI
 CSAL      WRITE(16,937)RATIO,CEN
 CSAL      WRITE(41,938)RATIO
@@ -1017,6 +1068,23 @@ C=======================================================================
  1060 FORMAT(1X,'FID(',I2,')=',F15.10,4X,'PSI(',I2,')=',F15.10)
       WRITE(*,434)VMAX
  434  FORMAT(1X,'VMAX=',F32.14)
+C     Energy trace of the simply connected phases - the parent's
+C     collapse and the rebound after the hole closes.  It is what says
+C     whether the jump held: past the jump the total should stay flat at
+C     the level it was set to, and well under the parent's own energy.
+      IF (ILS.EQ.1.AND.BUBBLE_TOPOLOGY.EQ.PRE_IMPACT) THEN
+      DO 2650 J=1,M
+      PHI_WORK(J)=FID(J)
+      PHIN_WORK(J)=PSI(J)
+ 2650 CONTINUE
+      CALL SURFACE_KINETIC_ENERGY(RR,ZZ,DRDXI,DZDXI,PHI_WORK,
+     &PHIN_WORK,DL,M,ENERGY_VCHECK,ENERGY_TKIN)
+      ENERGY_PGAS=EPS*(VOLI/VOLT)**POLYEXP
+      ENERGY_EPOT=VOLT+ENERGY_PGAS*VOLT/(POLYEXP-1.0D0)
+      ENERGY_TOTAL=ENERGY_TKIN+ENERGY_EPOT
+      WRITE(347,*)K-1,POST_STEPS,DTIME,VOLT,ENERGY_TKIN,ENERGY_EPOT,
+     &ENERGY_TOTAL,ENERGY_TOTAL/ENERGY_REF
+      ENDIF
 C=======================================================================
 C     TOROIDAL PANEL REDISTRIBUTION
 C
@@ -1221,6 +1289,46 @@ C     Total potential at the nodes before the ring is released.
       QOLD_AXIS(J)=QREM_NODE(J)+QVR_NODE(J)
  2620 CONTINUE
       GAM_AXIS=GAMMAD(1)
+C=======================================================================
+C     ENERGY JUMP AT THE COLLAPSE-REBOUND
+C
+C     The hole closing onto the axis is the minimum-volume instant of
+C     this collapse: the bubble stops contracting here and rebounds as a
+C     simply connected surface.  That is where Lind and Phillips apply
+C     the discontinuous jump in the potential which stands for the
+C     energy radiated away as a shock, and it is applied here, on the
+C     potential the reconnection hands to the rebound.
+C
+C     The energy is measured on the surface as it stands, before the
+C     surgery: the kinetic energy of the liquid follows from the
+C     potential and its normal derivative on the bubble alone, because
+C     the rigid wall carries no flux and the axis has no area.  The
+C     vortex ring's own share of the energy is not counted, which is
+C     correct here - the ring is released by this surgery and its energy
+C     leaves with it.
+C=======================================================================
+      DO 2700 J=1,M
+      PHI_WORK(J)=QTOTAL(J)
+      PHIN_WORK(J)=PSI(J)+UVR(J)*DZDXI(J)-VVR(J)*DRDXI(J)
+ 2700 CONTINUE
+      CALL SURFACE_KINETIC_ENERGY(RR,ZZ,DRDXI,DZDXI,PHI_WORK,
+     &PHIN_WORK,DL,M,ENERGY_VCHECK,ENERGY_TKIN)
+      ENERGY_PGAS=EPS*(VOLI/VOLT)**POLYEXP
+      ENERGY_EPOT=VOLT+ENERGY_PGAS*VOLT/(POLYEXP-1.0D0)
+      ENERGY_TOTAL=ENERGY_TKIN+ENERGY_EPOT
+      ENERGY_BEFORE_JUMP=ENERGY_TOTAL
+C     What the rebound is allowed to keep: the measured energy less the
+C     radiated share, and never more than the parent bubble ever had.
+      ENERGY_TARGET=ENERGY_RETAINED*DMIN1(ENERGY_TOTAL,ENERGY_REF)
+      ENERGY_TKEEP=ENERGY_TARGET-ENERGY_EPOT
+      IF (ENERGY_TKEEP.LT.0.0D0) ENERGY_TKEEP=0.0D0
+C     The kinetic energy is quadratic in the potential, so the jump is a
+C     single factor on it.  It can only ever remove energy.
+      ENERGY_LAMBDA=1.0D0
+      IF (ENERGY_TKIN.GT.1.0D-30) THEN
+      ENERGY_LAMBDA=DSQRT(ENERGY_TKEEP/ENERGY_TKIN)
+      ENDIF
+      IF (ENERGY_LAMBDA.GT.1.0D0) ENERGY_LAMBDA=1.0D0
       CALL RECONNECT_ON_AXIS(R,Z,QOLD_AXIS,GAM_AXIS,ISTART(1),
      &IEND(1),RARC,ZARC,QARC,NARC,ZPINCH,IFAIL)
       IF (IFAIL.NE.0) THEN
@@ -1228,6 +1336,15 @@ C     Total potential at the nodes before the ring is released.
       STOP
       ENDIF
       VOL_AXIS_BEFORE=VOLT
+      DO 2701 KA=1,NARC
+      QARC(KA)=ENERGY_LAMBDA*QARC(KA)
+ 2701 CONTINUE
+      ENERGY_TOTAL=ENERGY_LAMBDA*ENERGY_LAMBDA*ENERGY_TKIN+ENERGY_EPOT
+      WRITE(346,*)'REBOUND',K-1,POST_STEPS,DTIME,VOLT,ENERGY_TKIN,
+     &ENERGY_EPOT,ENERGY_BEFORE_JUMP,ENERGY_REF,ENERGY_TOTAL,
+     &ENERGY_LAMBDA
+      WRITE(*,*)'ENERGY JUMP AT REBOUND: E=',ENERGY_BEFORE_JUMP,
+     &' -> ',ENERGY_TOTAL,' LAMBDA=',ENERGY_LAMBDA
       DO 2621 KA=1,NARC
       R(KA)=RARC(KA)
       Z(KA)=ZARC(KA)
@@ -2126,7 +2243,8 @@ C     copy of node 1, so panel M is the physical closing panel.
       GO TO 821
       ENDIF
       IF (BUBBLE_TOPOLOGY.EQ.PRE_IMPACT) THEN
-C     Find the interior point closest to the axis.
+C     Find the interior point closest to the axis, and measure it against
+C     the panels that have to resolve it.
       JABS=0
       RABS=1.0D100
       DO 311 J=2,M
@@ -2135,7 +2253,14 @@ C     Find the interior point closest to the axis.
       JABS=J
       ENDIF
   311 CONTINUE
-      IF (JABS.GT.0.AND.RABS.LT.AXIS_ABSORB_RADIUS) THEN
+      ABSRATIO=1.0D100
+      IF (JABS.GT.0) THEN
+      HABS=0.5D0*(DSQRT((R(JABS)-R(JABS-1))**2+(Z(JABS)-Z(JABS-1))**2)
+     &+DSQRT((R(JABS+1)-R(JABS))**2+(Z(JABS+1)-Z(JABS))**2))
+      IF (HABS.GT.1.0D-12) ABSRATIO=RABS/HABS
+      ENDIF
+      IF (JABS.GT.0.AND.(RABS.LT.AXIS_ABSORB_RADIUS.OR.
+     &ABSRATIO.LT.AXIS_ABSORB_FRACTION)) THEN
       CALL ABSORB_ON_AXIS(R,Z,FID,M,JABS,MABS,VDROP,IFAIL)
       IF (IFAIL.EQ.0) THEN
       NABSORB=NABSORB+1
@@ -2169,7 +2294,7 @@ C     Find the interior point closest to the axis.
      &VABSBEF,VOLT,VDROP,VDROP/VABSBEF
       CALL FLUSH(345)
       WRITE(*,*)'AXIS ABSORBED A PINCHED POINT AT T=',DTIME,
-     &' NODE=',JABS,' R=',RABS
+     &' NODE=',JABS,' R=',RABS,' R/H=',ABSRATIO
       WRITE(*,*)'DROPPED PIECE VOLUME=',VDROP,' FRACTION=',
      &VDROP/VABSBEF,' PANELS NOW=',M
       VOLUME_PREV_ACCEPTED=VOLT
@@ -3544,10 +3669,24 @@ C=======================================================================
       SUBROUTINE ABSORB_ON_AXIS(R,Z,FID,M,JX,MNEW,VDROP,IFAIL)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NPA=600)
+C     A piece larger than this is not a neck being pinched off, it is a
+C     second component, and absorbing it would delete a live daughter.
+C     Declared here as well as in the main program: a PARAMETER of the
+C     main program is not in scope inside a subroutine, and left to
+C     implicit typing the name is an undefined local that reads as zero
+C     and refuses every absorption.
+      PARAMETER (AXIS_ABSORB_MAX_DROP=1.0D-2)
       DIMENSION R(NPA),Z(NPA),FID(NPA)
       DIMENSION RT(NPA),ZT(NPA),FT(NPA)
       IFAIL=0
-      IF (JX.LE.2.OR.JX.GE.M) THEN
+C     JX is the node that has reached the axis.  The two nodes next to
+C     the on-axis ends are admitted as well: there the piece cut off is
+C     the fold the end has swung across the axis, of no volume, and the
+C     surgery trims that single panel and re-closes the contour on the
+C     axis.  Refusing them left the caller with nowhere to go but the
+C     legacy stop, while clamping the node back onto the axis only put a
+C     zero-radius panel next to the end and the velocity ran away.
+      IF (JX.LT.2.OR.JX.GT.M) THEN
       IFAIL=1
       RETURN
       ENDIF
@@ -3589,6 +3728,12 @@ C     Keep the piece after the pinch; its first node becomes the end.
       IFAIL=2
       RETURN
       ENDIF
+      IF (VA+VB.GT.0.0D0) THEN
+      IF (VDROP/(VA+VB).GT.AXIS_ABSORB_MAX_DROP) THEN
+      IFAIL=6
+      RETURN
+      ENDIF
+      ENDIF
       DO 70 J=1,NKEEP
       R(J)=RT(J)
       Z(J)=ZT(J)
@@ -3613,6 +3758,18 @@ C     The contour must leave the axis radially at both ends.
       IFAIL=4
       RETURN
       ENDIF
+C     A pinch whose neighbour is itself already on the axis leaves the
+C     end panel with no length once the end is laid down radially.  The
+C     arc length then stops increasing, the splines divide by it, and
+C     the whole geometry goes to NaN a step later.  Refuse the surgery
+C     on such a contour so the caller stops on a state that can still be
+C     read and plotted.
+      DO 95 J=1,MNEW
+      IF (DSQRT((R(J+1)-R(J))**2+(Z(J+1)-Z(J))**2).LT.1.0D-8) THEN
+      IFAIL=5
+      RETURN
+      ENDIF
+   95 CONTINUE
       RETURN
       END
 
@@ -5989,6 +6146,49 @@ C     Endpoint 4 projected onto segment 1--2.
    20 CONTINUE
       RETURN
       END
+
+      SUBROUTINE SURFACE_KINETIC_ENERGY(RR,ZZ,DRDXI,DZDXI,PHI,PHIN,
+     &DL,M,VOLD,TKIN)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      PARAMETER (TWOPI=6.283185307179586D0)
+      DIMENSION RR(NPA),ZZ(NPA),DRDXI(NPA),DZDXI(NPA)
+      DIMENSION PHI(NPA),PHIN(NPA),DL(NPA)
+C=======================================================================
+C     KINETIC ENERGY OF THE LIQUID FROM THE BUBBLE SURFACE
+C
+C     For an irrotational exterior flow that dies away at infinity the
+C     energy is a surface integral,
+C
+C        T = -1/2 * integral phi (dphi/dn) dS,     dS = 2 pi r dl,
+C
+C     taken over the whole boundary with n the normal out of the bubble.
+C     The rigid wall contributes nothing because dphi/dn vanishes on it,
+C     and the axis contributes nothing because its area is zero, so the
+C     meridional arc alone carries the integral.
+C
+C     The same quadrature applied to (x.n)/3 is the enclosed volume, and
+C     its sign says which way the assumed normal actually points, so the
+C     panel ordering does not have to be assumed - if it comes out
+C     negative both integrals are flipped together.
+C=======================================================================
+      VOLD=0.0D0
+      TKIN=0.0D0
+      DO 1 J=1,M
+      H=DL(J+1)-DL(J)
+      DS=TWOPI*RR(J)*H
+      ANR=DZDXI(J)
+      ANZ=-DRDXI(J)
+      VOLD=VOLD+(RR(J)*ANR+ZZ(J)*ANZ)*DS/3.0D0
+      TKIN=TKIN-0.5D0*PHI(J)*PHIN(J)*DS
+ 1    CONTINUE
+      IF (VOLD.LT.0.0D0) THEN
+      VOLD=-VOLD
+      TKIN=-TKIN
+      ENDIF
+      RETURN
+      END
+
 
       SUBROUTINE WRITE_PRECONTACT_CHECKPOINT(IUNIT,ISUM,ISTEP,
      &IPOST,TIME,R,Z,RR,ZZ,FID,PSI,DL,DLM,AR,BR,CR,DR,

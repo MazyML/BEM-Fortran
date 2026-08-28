@@ -20,6 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / ".tools" / "python-pack
 import imageio_ffmpeg  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
+# The parent bubble, before any split: the fresh run that starts from a sphere
+# at its maximum radius and collapses onto the wall.  It stops at the contact
+# the first generation restarts from, so it is the movie's t = 0 prologue.
+PROLOGUE = ROOT / "run" / "final_abs" / "base"
+PROLOGUE_TARGET = 130
 GENERATIONS = [ROOT / "run" / "final_abs" / ("gen%d" % n) for n in range(1, 13)]
 OUTPUT = ROOT / "output" / "split-continuation"
 
@@ -42,13 +47,15 @@ SAMPLE_TARGET = dict([(1, 110), (2, 60), (11, 110), (12, 200)]
 # since truncating it would leave nothing to show.
 MAXU_LIMIT = 1.0e4
 
-# A rebound cannot pass the bubble it started from, so anything approaching
-# V/V0 = 1 is not physical.  Past VOLUME_TRUST the expansion is being driven by
-# a surface potential the surgeries have inflated - it reaches V/V0 = 12 if left
-# alone - so those states are banded, and the run is cut at VOLUME_LIMIT rather
-# than showing a balloon that means nothing.
-VOLUME_TRUST = 0.28
-VOLUME_LIMIT = 12.5
+# A rebound cannot pass the bubble it started from, so V/V0 = 1 is the bound
+# that means something.  The solver now applies the radiated-energy jump to the
+# potential at the collapse-rebound, so the expansion is driven by an energy the
+# bubble actually has and it turns over on its own.  These two are kept as
+# guards against a state that has been handed energy from nowhere - banded at
+# VOLUME_TRUST, cut at VOLUME_LIMIT - rather than as the working limits they
+# were when the rebound ran away to twelve times the parent volume.
+VOLUME_TRUST = 1.0
+VOLUME_LIMIT = 1.6
 
 # Beyond this share of the parent circulation, discarding a daughter is no
 # longer a small correction and the generation is flagged on screen.
@@ -231,6 +238,61 @@ def read_retirements(path):
     return events
 
 
+def read_history(path):
+    """A two-column pre-impact history: time and one quantity."""
+    rows = []
+    for line in path.read_text().splitlines():
+        fields = line.split()
+        if len(fields) >= 2:
+            rows.append((float(fields[0]), float(fields[1])))
+    return rows
+
+
+def read_peak_speeds(path):
+    """Peak surface speed per accepted step, from the solver's own log.
+
+    The log prints VMAX for each sub-stage and then the step number, so the
+    values that precede a `K=` line belong to that step.
+    """
+    speeds, pending = [], []
+    for line in path.read_text().splitlines():
+        if "VMAX=" in line:
+            try:
+                pending.append(abs(float(line.split("=")[1])))
+            except ValueError:
+                pass
+        elif line.strip().startswith("K="):
+            speeds.append(max(pending) if pending else 0.0)
+            pending = []
+    return speeds
+
+
+def load_prologue(directory):
+    """The parent bubble's collapse, put into the same shape as a generation.
+
+    The pre-impact phase never enters the multi-component solver, so it writes
+    no MULTICOMP_DIAG.dat; its history lives in the scalar files instead.  The
+    rows are assembled here with the same column meanings the generations use,
+    so the sampling and the drawing need no special case.
+    """
+    frames = read_frames(directory / "WALL-CAVITATION-HALF.plt")
+    volume = read_history(directory / "VOLT.TXT")
+    centroid = read_history(directory / "CENT.TXT")
+    speeds = read_peak_speeds(directory / "out.txt")
+    count = min(len(frames), len(volume), len(centroid))
+    diag = []
+    for index in range(count):
+        row = [0.0] * 17
+        row[0] = row[1] = float(index)
+        row[2] = volume[index][0]
+        row[3] = row[4] = volume[index][1]
+        row[6] = volume[index][1] / V0
+        row[8] = centroid[index][1]
+        row[16] = speeds[index] if index < len(speeds) else 0.0
+        diag.append(row)
+    return frames[:count], diag
+
+
 def load_generation(directory):
     frames = read_frames(directory / "WALL-CAVITATION-HALF.plt")
     diag = read_diag(directory / "MULTICOMP_DIAG.dat")
@@ -366,8 +428,29 @@ def assign_views(states):
     shrinking; leaving it fixed instead would let the over-expanded rebound
     paint straight over the axes and the sidebar.
     """
+    prologue = [state for state in states if state["generation"] == 0]
+    if prologue:
+        low = min(point[1] for state in prologue
+                  for zones, _v, _r in state["components"]
+                  for zone in zones for point in zone) - VIEW_PAD
+        high = max(point[1] for state in prologue
+                   for zones, _v, _r in state["components"]
+                   for zone in zones for point in zone) + VIEW_PAD
+        rmax = max(abs(point[0]) for state in prologue
+                   for zones, _v, _r in state["components"]
+                   for zone in zones for point in zone) + VIEW_PAD
+        needed = 2.0 * rmax / _aspect
+        if high - low < needed:
+            middle = 0.5 * (low + high)
+            low, high = middle - needed / 2.0, middle + needed / 2.0
+        half = (high - low) * _aspect / 2.0
+        for state in prologue:
+            state["view_z"], state["view_r"] = (low, high), (-half, half)
+
     zlow, zhigh = VIEW_Z
     for state in states:
+        if state["generation"] == 0:
+            continue
         rmax, low, high = 0.0, zlow, zhigh
         for zones, _volume, _ring in state["components"]:
             for zone in zones:
@@ -416,7 +499,7 @@ def render(state, index, count):
     mono = font(20 * SS, True)
 
     draw.text((120 * SS, 30 * SS),
-              "Cavitation bubble above a rigid wall: continuation after the split at contact",
+              "Cavitation bubble above a rigid wall: collapse, split at contact, continuation",
               font=title, fill=INK)
     draw.text((120 * SS, 72 * SS),
               "Axisymmetric BEM  -  gamma = 1.5  -  daughters merge when they touch; a torus whose hole closes is made whole",
@@ -444,6 +527,8 @@ def render(state, index, count):
         contour(draw, zones, to_main, BUBBLE if larger else SMALLER,
                 BUBBLE_EDGE if larger else SMALLER_EDGE, 3 if larger else 2)
     for _zones, _volume, ring in state["components"]:
+        if ring is None:      # no ring exists before the first split
+            continue
         for signed in (-ring[0], ring[0]):
             cx, cy = to_main((signed, ring[1]))
             marker = 5 * SS
@@ -513,6 +598,8 @@ def render(state, index, count):
         rows.append(("merged at gap/h", "%.3f" % info.get("ratio", 0.0)))
         rows.append(("circulation after merge", "%+.2f of %+.2f"
                      % (info.get("merged", 0.0), info.get("sum", 0.0))))
+    elif state.get("extra_rows"):
+        rows.extend(state["extra_rows"])
     else:
         rows.append((state["removal_label"], "%.2f %% of V" % (100.0 * state["dropped_fraction"])))
         rows.append(("removed circulation", "%+.2f of %+.2f" % (state["dropped"], state["parent"])))
@@ -522,9 +609,8 @@ def render(state, index, count):
         draw.text((x, row_y), name, font=small, fill=FAINT)
         draw.text((1520 * SS, row_y - 2 * SS), value, font=body, fill=colour, anchor="ra")
 
-    draw.text((x, 824 * SS), "generation %d of %d   -   state %d / %d"
-              % (state["generation"], state["generations"], index + 1, count),
-              font=small, fill=FAINT)
+    draw.text((x, 824 * SS), "%s   -   state %d / %d"
+              % (state["stage"], index + 1, count), font=small, fill=FAINT)
     bar = (x, 852 * SS, 1520 * SS, 862 * SS)
     draw.rounded_rectangle(bar, radius=5 * SS, fill=(28, 52, 69))
     draw.rounded_rectangle((bar[0], bar[1], bar[0] + (bar[2] - bar[0]) * (index + 1) / count, bar[3]),
@@ -535,8 +621,8 @@ def render(state, index, count):
                                fill=(58, 22, 22), outline=WARN, width=SS)
         message = ("beyond the physical range - peak speed %.1e, clock advancing at round-off"
                    % state["maxu"]) if state["degenerate"] else (
-                  "over-driven - the surface potential inherited from the surgeries is too "
-                  "large; a rebound cannot pass V/V0 = 1")
+                  "over-driven - this surface holds more energy than the parent bubble "
+                  "started with; a rebound cannot pass V/V0 = 1")
         draw.text((146 * SS, 134 * SS), message, font=small, fill=WARN)
 
     if state["caption"]:
@@ -547,8 +633,39 @@ def render(state, index, count):
 
 
 # ----------------------------------------------------------------------- main
+def prologue_states():
+    """States for the parent bubble, ahead of the first split."""
+    frames, diag = load_prologue(PROLOGUE)
+    keep = sample_evenly_in_time(diag, PROLOGUE_TARGET)
+    out = []
+    for position, index in enumerate(keep):
+        row = diag[index]
+        caption = ""
+        phase, colour = "parent bubble collapsing", BUBBLE_EDGE
+        if position == 0:
+            phase, colour = "parent bubble at maximum radius", ACCENT
+            caption = ("the parent bubble starts at its maximum radius R0, its centre "
+                       "1.5 R0 above the wall, and collapses onto it")
+        elif index == len(diag) - 1:
+            phase, colour = "contact captured", ACCENT
+            caption = ("the jet has crossed the bubble and touched the far side - this is "
+                       "the contact generation 1 restarts from and splits")
+        out.append(dict(
+            components=[(frames[index], row[3], None)], time=row[2], volume=row[3],
+            centroid=row[8], maxu=row[16], phase=phase, phase_colour=colour,
+            caption=caption, generation=0, generations=len(GENERATIONS),
+            stage="parent bubble - before the first split",
+            extra_rows=[("removed so far", "nothing - no split yet"),
+                        ("stand-off gamma", "1.500")],
+            dropped=0.0, parent=0.0, dropped_fraction=0.0,
+            removal_label="discarded at split", merged_info=None, flagged=False,
+            degenerate=False, overdriven=False, hold=16 if caption else 2,
+        ))
+    return out
+
+
 def build_states():
-    states = []
+    states = prologue_states()
     for number, directory in enumerate(GENERATIONS, 1):
         frames, diag, log = load_generation(directory)
         keep = sample_evenly_in_time(diag, SAMPLE_TARGET.get(number, len(diag)))
@@ -642,12 +759,13 @@ def build_states():
                     "surface reached the axis":
                         "the growing bubble drove its lower surface onto the axis - the run ends here",
                     "expansion over-driven":
-                        "shown to here only - past this the bubble over-expands and the result is not physical",
+                        "shown to here only - past this the bubble holds more energy than the parent ever had",
                 }.get(log["ending"], "the continuation ends here")
             states.append(dict(
                 components=components, time=row[2], volume=row[3], centroid=row[8],
                 maxu=row[16], phase=phase, phase_colour=colour,
                 caption=caption, generation=number, generations=len(GENERATIONS),
+                stage="generation %d of %d" % (number, len(GENERATIONS)),
                 dropped=applied["gamma"], parent=log["parent"],
                 dropped_fraction=applied["fraction"], removal_label=applied["label"],
                 merged_info=merged_info, flagged=flagged,
