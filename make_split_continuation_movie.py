@@ -19,14 +19,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / ".tools" / "python-pack
 import imageio_ffmpeg  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
-GENERATIONS = [ROOT / "run" / "merge2" / ("gen%d" % n) for n in range(1, 12)]
+GENERATIONS = [ROOT / "run" / "final_abs" / ("gen%d" % n) for n in range(1, 13)]
 OUTPUT = ROOT / "output" / "split-continuation"
 
 # Generations 3 and 4 spend thousands of steps advancing the clock very little,
 # so they are sampled evenly in physical time instead of frame by frame.
 # Generations 1 and 11 cover most of the elapsed time; the nine between them
 # are short hops from one coalescence to the next, so they get a smaller share.
-SAMPLE_TARGET = dict([(1, 130), (11, 130)] + [(n, 62) for n in range(2, 11)])
+SAMPLE_TARGET = dict([(1, 110), (2, 60), (11, 110), (12, 200)]
+                     + [(n, 48) for n in range(3, 11)])
 
 # A generation is truncated at the last state whose peak speed is still
 # physical.  The solver now stops itself on the time-step floor, so this rarely
@@ -40,6 +41,14 @@ SAMPLE_TARGET = dict([(1, 130), (11, 130)] + [(n, 62) for n in range(2, 11)])
 # since truncating it would leave nothing to show.
 MAXU_LIMIT = 1.0e4
 
+# A rebound cannot pass the bubble it started from, so anything approaching
+# V/V0 = 1 is not physical.  Past VOLUME_TRUST the expansion is being driven by
+# a surface potential the surgeries have inflated - it reaches V/V0 = 12 if left
+# alone - so those states are banded, and the run is cut at VOLUME_LIMIT rather
+# than showing a balloon that means nothing.
+VOLUME_TRUST = 0.28
+VOLUME_LIMIT = 0.45
+
 # Beyond this share of the parent circulation, discarding a daughter is no
 # longer a small correction and the generation is flagged on screen.
 CIRCULATION_WARN = 1.0
@@ -47,7 +56,7 @@ CIRCULATION_WARN = 1.0
 WIDTH, HEIGHT, FPS, SS = 1600, 896, 30, 2
 MAIN = (120, 118, 1020, 782)
 INSET = (1100, 140, 1520, 520)
-VIEW_Z = (0.84, 1.43)
+VIEW_Z = (0.25, 1.98)
 _aspect = (MAIN[2] - MAIN[0]) / (MAIN[3] - MAIN[1])
 _rspan = (VIEW_Z[1] - VIEW_Z[0]) * _aspect
 VIEW_R = (-_rspan / 2, _rspan / 2)
@@ -137,7 +146,43 @@ def read_log(path):
         info["ending"] = "time step underflow"
     elif "UNRESOLVED THIRD TOPOLOGY" in text:
         info["ending"] = "unresolved reconnection"
+    if "R(J)<0.0001" in text:
+        info["ending"] = "surface reached the axis"
     return info
+
+
+def read_absorptions(path):
+    """Points the closure took in after the bubble was made whole."""
+    events = {}
+    if not path.exists():
+        return events
+    for line in path.read_text().splitlines():
+        f = line.split()
+        if not f or f[0].startswith("#"):
+            continue
+        row = [float(v) for v in f]
+        events[int(row[2])] = dict(radius=row[5], dropped=row[9], fraction=row[10])
+    return events
+
+
+def read_axis(path):
+    """The step at which the torus was made whole again, if it happened."""
+    if not path.exists():
+        return None
+    info = {}
+    for line in path.read_text().splitlines():
+        f = line.split()
+        if len(f) < 2 or f[0] != "#":
+            continue
+        if f[1] == "TIME" and len(f) >= 6:
+            info["post"] = int(float(f[5]))
+        elif f[1] == "RELEASED_CIRCULATION" and len(f) >= 3:
+            info["gamma"] = float(f[2])
+        elif f[1] == "RMIN" and len(f) >= 7:
+            info["rmin"] = float(f[4])
+        elif f[1] == "VOLUME_BEFORE" and len(f) >= 7:
+            info["dv"] = float(f[6])
+    return info if "post" in info else None
 
 
 def read_merges(path):
@@ -201,8 +246,15 @@ def load_generation(directory):
                 break
         if count < available:
             log["ending"] = "peak speed runs away"
+    for index in range(count):
+        if diag[index][6] > VOLUME_LIMIT:
+            count = index
+            log["ending"] = "expansion over-driven"
+            break
     log["retirements"] = read_retirements(directory / "COMPONENT_RETIREMENT_DIAG.dat")
     log["merges"] = read_merges(directory / "MERGE_DIAG.dat")
+    log["absorb"] = read_absorptions(directory / "AXIS_ABSORB_DIAG.dat")
+    log["axis"] = read_axis(directory / "AXIS_RECONNECTION.dat")
     return frames[:count], diag[:count], log
 
 
@@ -259,9 +311,25 @@ def mapper(box, xlim, ylim):
 
 
 def contour(draw, zones, to_pixels, fill, edge, width=3):
-    """The daughter is toroidal, so each signed-r contour is a closed loop that
-    does not reach the axis.  They are filled separately; merging them would
-    paint a bridge across r = 0 that is not part of the bubble."""
+    """A toroidal component is a closed loop clear of the axis, so its two
+    signed-r contours are separate curves and are filled separately; merging
+    them would paint a bridge across r = 0 that is not part of the bubble.
+
+    A component that has been made whole again is the other case: an open arc
+    with both ends on the axis.  There the two halves are one surface, so they
+    are joined into a single polygon.  Filling them separately would close each
+    half along r = 0 and draw a seam up the middle of a bubble that has no
+    boundary there at all."""
+    positive = zones[0]
+    reaches_axis = (len(zones) == 2
+                    and abs(positive[0][0]) < 1.0e-6
+                    and abs(positive[-1][0]) < 1.0e-6)
+    if reaches_axis:
+        polygon = ([to_pixels(point) for point in positive]
+                   + [to_pixels(point) for point in reversed(zones[1])])
+        draw.polygon(polygon, fill=fill)
+        draw.line(polygon + [polygon[0]], fill=edge, width=width * SS, joint="curve")
+        return
     for zone in zones:
         polygon = [to_pixels(point) for point in zone]
         draw.polygon(polygon, fill=fill)
@@ -300,7 +368,7 @@ def render(state, index, count):
               "Cavitation bubble above a rigid wall: continuation after the split at contact",
               font=title, fill=INK)
     draw.text((120 * SS, 72 * SS),
-              "Axisymmetric BEM  -  gamma = 1.5  -  daughters are filtered, and two that touch are merged back into one",
+              "Axisymmetric BEM  -  gamma = 1.5  -  daughters merge when they touch; a torus whose hole closes is made whole",
               font=body, fill=DIM)
 
     # ---- main zoomed view
@@ -309,8 +377,8 @@ def render(state, index, count):
                            fill=PANEL, outline=EDGE, width=2 * SS)
     to_main = mapper(MAIN, VIEW_R, VIEW_Z)
     ticks(draw, MAIN, VIEW_R, VIEW_Z, to_main,
-          (-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3),
-          (0.9, 1.0, 1.1, 1.2, 1.3, 1.4), small)
+          (-1.0, -0.5, 0.0, 0.5, 1.0),
+          (0.4, 0.8, 1.2, 1.6), small)
     draw.line((to_main((0.0, VIEW_Z[0])), to_main((0.0, VIEW_Z[1]))),
               fill=(78, 109, 129), width=SS)
 
@@ -404,12 +472,14 @@ def render(state, index, count):
     draw.rounded_rectangle((bar[0], bar[1], bar[0] + (bar[2] - bar[0]) * (index + 1) / count, bar[3]),
                            radius=5 * SS, fill=(21, 190, 198))
 
-    if state["degenerate"]:
+    if state["degenerate"] or state["overdriven"]:
         draw.rounded_rectangle((134 * SS, 130 * SS, 1006 * SS, 156 * SS), radius=6 * SS,
                                fill=(58, 22, 22), outline=WARN, width=SS)
-        draw.text((146 * SS, 134 * SS),
-                  "beyond the physical range - peak speed %.1e, clock advancing at round-off"
-                  % state["maxu"], font=small, fill=WARN)
+        message = ("beyond the physical range - peak speed %.1e, clock advancing at round-off"
+                   % state["maxu"]) if state["degenerate"] else (
+                  "over-driven - the surface potential inherited from the surgeries is too "
+                  "large; a rebound cannot pass V/V0 = 1")
+        draw.text((146 * SS, 134 * SS), message, font=small, fill=WARN)
 
     if state["caption"]:
         draw.text((120 * SS, 852 * SS), state["caption"],
@@ -432,6 +502,12 @@ def build_states():
             # recent mid-run reduction, whichever last happened.
             applied = dict(fraction=log["dropped_fraction"], gamma=log["dropped"],
                            label="discarded at split")
+            overdriven = row[6] > VOLUME_TRUST
+            absorbed = None
+            if position:
+                for key in sorted(log["absorb"]):
+                    if int(diag[keep[position - 1]][1]) < key <= int(row[1]):
+                        absorbed = log["absorb"][key]
             merged_info = None
             for key in sorted(log["merges"]):
                 if key <= int(row[1]):
@@ -476,6 +552,19 @@ def build_states():
                                "circulation %+.2f from a sum of %+.2f, volume change %+.3f %%"
                                % (event.get("ratio", 0.0), event.get("merged", 0.0),
                                   event.get("sum", 0.0), 100.0 * event.get("dv", 0.0)))
+            elif absorbed:
+                phase, colour = "pinch absorbed", (255, 150, 120)
+                caption = ("a point of the old hole wall was pressed onto the axis - the closure "
+                           "took it in, dropping %.3f %% of the volume"
+                           % (100.0 * absorbed["fraction"]))
+            elif log["axis"] and int(row[1]) >= log["axis"]["post"]:
+                phase, colour = "whole bubble", BUBBLE_EDGE
+                if position and int(row[1]) >= log["axis"]["post"] > int(diag[keep[position - 1]][1]):
+                    ax = log["axis"]
+                    phase, colour = "made whole again", (255, 150, 120)
+                    caption = ("the hole reached %.3f R0 of the axis - torus made whole again, "
+                               "releasing circulation %+.2f, volume change %+.2f %%"
+                               % (ax.get("rmin", 0.0), ax.get("gamma", 0.0), 100.0 * ax.get("dv", 0.0)))
             elif len(components) > 1:
                 phase, colour = "two daughters evolving", BUBBLE_EDGE
             else:
@@ -492,6 +581,10 @@ def build_states():
                         "surface speed leaves the physical range and the step collapses - continuation ends here",
                     "time step underflow":
                         "the time step fell below the floor - the clock stops advancing usefully here",
+                    "surface reached the axis":
+                        "the growing bubble drove its lower surface onto the axis - the run ends here",
+                    "expansion over-driven":
+                        "shown to here only - past this the bubble over-expands and the result is not physical",
                 }.get(log["ending"], "the continuation ends here")
             states.append(dict(
                 components=components, time=row[2], volume=row[3], centroid=row[8],
@@ -499,7 +592,8 @@ def build_states():
                 caption=caption, generation=number, generations=len(GENERATIONS),
                 dropped=applied["gamma"], parent=log["parent"],
                 dropped_fraction=applied["fraction"], removal_label=applied["label"],
-                merged_info=merged_info, flagged=flagged, degenerate=log["degenerate"],
+                merged_info=merged_info, flagged=flagged,
+                degenerate=log["degenerate"], overdriven=overdriven,
                 hold=16 if caption else 2,
             ))
     return states

@@ -39,7 +39,9 @@ C=======================================================================
       LOGICAL POSTCOLLAPSE_ENABLED
       PARAMETER (POSTCOLLAPSE_ENABLED=.TRUE.)
       INTEGER BUBBLE_TOPOLOGY,NVR,POST_STEPS,NRELOC,NREDIST
-      INTEGER PAIR_JA,PAIR_JB,PAIR_INT,NMERGED
+      INTEGER PAIR_JA,PAIR_JB,PAIR_INT,NMERGED,NAXIS,NABSORB
+      LOGICAL AXIS_RECONNECTED,AXIS_HOLD
+      DIMENSION RARC(NPA),ZARC(NPA),QARC(NPA),QOLD_AXIS(NPA)
       INTEGER REBOUND_POSITIVE_COUNT,REBOUND_FIRST_POSITIVE_STEP
       INTEGER COMP_OF_PANEL,KSTART
       INTEGER PRE_IMPACT,TOROIDAL,TWO_COMPONENT
@@ -146,6 +148,27 @@ C     speed run away: the step control below holds the Bernoulli increment
 C     at ADFD, so once the speed term dominates it trades time for
 C     potential, the clock stops advancing and the neck keeps closing.
       PARAMETER (CONTACT_CAPTURE_SOLO=0.05D0)
+C     Distance from the axis to the nearest point of the ring-shaped bubble,
+C     below which the hole counts as closed and the bubble is made whole
+C     again.  It is an absolute length in R0, not a panel count, and it is
+C     deliberately generous: converting while the hole still has real width
+C     leaves an opening the simply connected solver can take, whereas waiting
+C     for the walls to meet leaves a slit its splines overshoot through.
+      PARAMETER (AXIS_CLOSE_RADIUS=0.02D0)
+C     Radius at which a point of the reopened surface counts as having
+C     been pressed onto the axis.  The walls of the old hole are still
+C     there after the bubble is made whole, and a growing bubble draws
+C     them into a thin slot; when a point in that slot reaches the axis
+C     the closure simply takes it in, which is the same event that made
+C     the bubble whole in the first place, happening again a little
+C     further along.
+      PARAMETER (AXIS_ABSORB_RADIUS=2.0D-3)
+C     A rebounding torus whose hole has closed is made whole again: the loop
+C     is cut at the hole, the opening trimmed, the two ends laid on the axis
+C     and the ring released, leaving the same simply connected bubble the run
+C     started from.
+      LOGICAL AXIS_RECONNECT_ENABLED
+      PARAMETER (AXIS_RECONNECT_ENABLED=.TRUE.)
 C     Speed at which that trade has clearly begun.  The validated first and
 C     second daughter contacts peak near 400, so this is well clear of them.
       PARAMETER (VMAX_CAPTURE=2.0D3)
@@ -283,6 +306,9 @@ C	OPEN(UNIT=3000,FILE='NOZ.plt')
      &' PANEL_A PANEL_B INTERSECT R_MID Z_MID VMAX'
       OPEN(UNIT=342,FILE='MERGE_DIAG.dat',STATUS='REPLACE')
       WRITE(342,*)'# COALESCENCE EVENTS'
+      OPEN(UNIT=345,FILE='AXIS_ABSORB_DIAG.dat',STATUS='REPLACE')
+      WRITE(345,*)'# EVENT STEP POST_STEP TIME NODE RADIUS PANELS',
+     &' VOLUME_BEFORE VOLUME_AFTER VOLUME_DROPPED FRACTION'
       OPEN(UNIT=338,FILE='SMOOTHING_DIAG.dat',STATUS='REPLACE')
       WRITE(338,*)'# STEP POST_STEP TIME COMPONENT VOLUME_BEFORE',
      &' VOLUME_RAW REL_CHANGE RESCALE VMAX'
@@ -330,6 +356,11 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       NREDIST=0
       NRETIRED=0
       NMERGED=0
+      NAXIS=0
+      NABSORB=0
+      AXIS_RECONNECTED=.FALSE.
+      AXIS_HOLD=.FALSE.
+      VOLI_REPORT=0.0D0
       REBOUND_POSITIVE_COUNT=0
       REBOUND_FIRST_POSITIVE_STEP=0
       HAVE_POST_VOLUME=.FALSE.
@@ -1138,6 +1169,192 @@ C=======================================================================
       ENDIF
       ENDIF
 C=======================================================================
+C     AXIS-CLOSURE GUARD.
+C
+C     A rebounding toroidal daughter widens until its hole closes back
+C     onto the symmetry axis, which would return it to a simply connected
+C     bubble.  That transition is the reverse of the one made at the first
+C     jet impact and is not implemented.  It also cannot be stepped
+C     through: the axisymmetric kernels and the ring potential are
+C     singular at r=0, so a contour arriving there drives the surface
+C     speed up without bound while the step control trades time for
+C     potential and the clock stops.  Stop on the last state where the
+C     hole is still open, measured against the local panel scale.
+C=======================================================================
+      IF (ILS.EQ.1.AND.BUBBLE_TOPOLOGY.EQ.TWO_COMPONENT) THEN
+      AXIS_RMIN=1.0D100
+      AXIS_HMIN=1.0D100
+      DO 2619 J=1,M
+      AXIS_RMIN=DMIN1(AXIS_RMIN,R(J))
+      JN=J+1
+      IC=COMP_OF_PANEL(J)
+      IF (IC.GE.1) THEN
+      IF (J.EQ.IEND(IC)) JN=ISTART(IC)
+      ENDIF
+      AXIS_HMIN=DMIN1(AXIS_HMIN,
+     &DSQRT((R(J)-R(JN))**2+(Z(J)-Z(JN))**2))
+ 2619 CONTINUE
+      IF (AXIS_HMIN.GT.1.0D-14) THEN
+      AXIS_RATIO=AXIS_RMIN/AXIS_HMIN
+      IF (AXIS_RMIN.LT.AXIS_CLOSE_RADIUS) THEN
+      OPEN(UNIT=343,FILE='AXIS_CLOSURE.dat',STATUS='REPLACE')
+      WRITE(343,*)'# TOROIDAL HOLE CLOSED ONTO THE AXIS'
+      WRITE(343,*)'# TIME STEP POST_STEP',DTIME,K-1,POST_STEPS
+      WRITE(343,*)'# RMIN HMIN RATIO',AXIS_RMIN,AXIS_HMIN,
+     &AXIS_RATIO
+      WRITE(343,*)'# VOLUME CENTROID VMAX',VOLT,CEN,VMAX
+      WRITE(343,*)'# NCOMP M',NCOMP,M
+      CLOSE(343)
+      WRITE(*,*)'TOROIDAL HOLE CLOSED ONTO THE AXIS AT T=',DTIME
+      WRITE(*,*)'RMIN=',AXIS_RMIN,' RMIN/H=',AXIS_RATIO,
+     &' VOLUME=',VOLT
+      IF (.NOT.AXIS_RECONNECT_ENABLED) THEN
+      WRITE(*,*)'AXIS RECONNECTION DISABLED; STOPPING ON THE CLOSURE'
+      STOP
+      ENDIF
+      IF (NCOMP.NE.1) THEN
+      WRITE(*,*)'AXIS CLOSURE WITH TWO LIVE COMPONENTS; STOPPING'
+      STOP
+      ENDIF
+C     Total potential at the nodes before the ring is released.
+      DO 2620 J=1,M
+      QOLD_AXIS(J)=QREM_NODE(J)+QVR_NODE(J)
+ 2620 CONTINUE
+      GAM_AXIS=GAMMAD(1)
+      CALL RECONNECT_ON_AXIS(R,Z,QOLD_AXIS,GAM_AXIS,ISTART(1),
+     &IEND(1),RARC,ZARC,QARC,NARC,ZPINCH,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO RECONNECT ON THE AXIS IFAIL=',IFAIL
+      STOP
+      ENDIF
+      VOL_AXIS_BEFORE=VOLT
+      DO 2621 KA=1,NARC
+      R(KA)=RARC(KA)
+      Z(KA)=ZARC(KA)
+ 2621 CONTINUE
+      M=NARC-1
+      R(M+1)=RARC(NARC)
+      Z(M+1)=ZARC(NARC)
+C     Panel-centre potential from the arc's node values.
+      DO 2622 J=1,M
+      FID(J)=0.5D0*(QARC(J)+QARC(J+1))
+      PSI(J)=0.0D0
+ 2622 CONTINUE
+C     The ring is released with the topology that required it.
+      NVR=0
+      NCOMP=1
+      GAMMAD(1)=0.0D0
+      AVRD(1)=0.0D0
+      CVRD(1)=0.0D0
+      CIRC_VR=0.0D0
+      AVR=0.0D0
+      CVR=0.0D0
+      DO 2623 J=1,NPA
+      QVR(J)=0.0D0
+      QVR_NODE(J)=0.0D0
+      UVR(J)=0.0D0
+      VVR(J)=0.0D0
+ 2623 CONTINUE
+C     The simply connected solver uses the global gas law, so VOLI is
+C     replaced by the value that reproduces this daughter's own law
+C     exactly; the original is kept for reporting V/V0.
+      IF (VOLI_REPORT.LE.0.0D0) VOLI_REPORT=VOLI
+      VOLI=VREFCOMP(1)*(PGAS_SPLIT/EPS)**(1.0D0/POLYEXP)
+      BUBBLE_TOPOLOGY=PRE_IMPACT
+      AXIS_RECONNECTED=.TRUE.
+      NAXIS=NAXIS+1
+C     Rebuild the arc the way the simply connected solver expects it:
+C     arc-length splines, then equal panels.
+      DL(1)=0.0D0
+      DO 2624 J=2,M+1
+      DL(J)=DL(J-1)+DSQRT((R(J)-R(J-1))**2+(Z(J)-Z(J-1))**2)
+ 2624 CONTINUE
+      DO 2625 LK=1,5
+      CALL CUBSPLR (R,DL,AR,BR,CR,DR,M)
+      CALL CUBSPLZ (Z,DL,AZ,BZ,CZ,DZ,M)
+      IF (LK.EQ.5) GO TO 2625
+      CALL ARLEGAUS (DL,ARCL,M)
+      DL(1)=0.0D0
+      DO 2626 J=2,M+1
+      DL(J)=DL(J-1)+ARCL(J-1)
+ 2626 CONTINUE
+ 2625 CONTINUE
+      DO 2627 J=1,M
+      DH(J)=DL(J+1)-DL(J)
+ 2627 CONTINUE
+      CALL FINDFIF1 (FID,DH,FIDL1,M)
+      CALL FINDFIF2 (FID,DH,FIDL2,M)
+      CALL CUBSPLFI (FID,DH,FIDL1,FIDL2,DL2,AFI,BFI,CFI,DFI,M)
+      EQDL=DL(M+1)/M
+      CALL REDISFI (DL2,EQDL,AFI,BFI,CFI,DFI,FIDLN,M)
+      CALL REDISR (DL,EQDL,AR,BR,CR,DR,RN,M)
+      CALL REDISZ (DL,EQDL,AZ,BZ,CZ,DZ,ZN,M)
+      DO 2628 J=2,M
+      R(J)=RN(J)
+      Z(J)=ZN(J)
+ 2628 CONTINUE
+      FIDL(1)=FIDL1
+      DO 2629 J=2,M
+      FIDL(J)=FIDLN(J)
+ 2629 CONTINUE
+      FIDL(M+1)=FIDL2
+      R(1)=0.0D0
+      R(M+1)=0.0D0
+      DL(1)=0.0D0
+      DO 2630 J=2,M+1
+      DL(J)=DL(J-1)+EQDL
+ 2630 CONTINUE
+      DO 2631 J=1,M
+      DLM(J)=DL(J)+0.5D0*(DL(J+1)-DL(J))
+      DH(J)=DL(J+1)-DL(J)
+ 2631 CONTINUE
+      CALL CUBSPLR (R,DL,AR,BR,CR,DR,M)
+      CALL CUBSPLZ (Z,DL,AZ,BZ,CZ,DZ,M)
+      CALL CUSPFUFI (FIDL,DL,AFI,BFI,CFI,DFI,M)
+      CALL CUSPRR (DL,AR,BR,CR,DR,RR,M)
+      CALL CUSPZZ (DL,AZ,BZ,CZ,DZ,ZZ,M)
+      CALL CUSPFID (DL,AFI,BFI,CFI,DFI,FID,M)
+      MHL=M+NWALL
+      CALL DEFINEWALL(R,Z,RR,ZZ,M,MHL,WALLR)
+      DO 2632 J=M+1,MHL
+      PSICS(J)=0.0D0
+ 2632 CONTINUE
+      DO 2633 J=M+2,MHL+2
+      UEP(J)=0.0D0
+      VEP(J)=0.0D0
+ 2633 CONTINUE
+      CALL FINDVOL (DL,VOLT,M)
+      CALL FINDCEN (DL,CEN,M)
+      RATIO=VOLT/VOLI_REPORT
+      OPEN(UNIT=344,FILE='AXIS_RECONNECTION.dat',STATUS='REPLACE')
+      WRITE(344,*)'# TOROIDAL HOLE CLOSED - RETURNED TO SIMPLY',
+     &' CONNECTED'
+      WRITE(344,*)'# TIME STEP POST_STEP',DTIME,K-1,POST_STEPS
+      WRITE(344,*)'# RMIN HMIN RATIO',AXIS_RMIN,AXIS_HMIN,
+     &AXIS_RATIO
+      WRITE(344,*)'# PINCH_HEIGHT',ZPINCH
+      WRITE(344,*)'# RELEASED_CIRCULATION',GAM_AXIS
+      WRITE(344,*)'# VOLUME_BEFORE AFTER RELATIVE',VOL_AXIS_BEFORE,
+     &VOLT,(VOLT-VOL_AXIS_BEFORE)/VOL_AXIS_BEFORE
+      WRITE(344,*)'# PANELS',M
+      WRITE(344,*)'# NODE R Z FID'
+      DO 2637 J=1,M+1
+      FDUMP=0.0D0
+      IF (J.LE.M) FDUMP=FID(J)
+      WRITE(344,*)J,R(J),Z(J),FDUMP
+ 2637 CONTINUE
+      CLOSE(344)
+      WRITE(*,*)'RECONNECTED ON THE AXIS AT Z=',ZPINCH,
+     &' RELEASED CIRCULATION=',GAM_AXIS
+      WRITE(*,*)'NOW SIMPLY CONNECTED: M=',M,' VOLUME=',VOLT
+      VOLUME_PREV_ACCEPTED=VOLT
+      TIME_PREV_ACCEPTED=DTIME
+      AXIS_HOLD=.TRUE.
+      GO TO 821
+      ENDIF
+      ENDIF
+      ENDIF
+C=======================================================================
 C     COALESCENCE GUARD.
 C
 C     Two live components are watched for closing on each other, which no
@@ -1166,7 +1383,7 @@ C=======================================================================
       IF (PAIR_INT.NE.0) IMERGE=1
       IF (IMERGE.EQ.1) THEN
       MMERGE=MCOMP(1)+MCOMP(2)
-      IF (MMERGE.GT.128) MMERGE=128
+      IF (MMERGE.GT.256) MMERGE=256
       WRITE(*,*)'COMPONENTS TOUCHING AT GAP/H=',PAIR_RATIO,
      &' PANELS=',PAIR_JA,PAIR_JB
       GAM1=GAMMAD(1)
@@ -1795,8 +2012,12 @@ C     complete Heun step with half the attempted increment.
  701  CONTINUE
 CSAL      CRITER1=Z(1)-Z(M+1)
       CRITER1=DABS(Z(1)-Z(M+1))
+C     A bubble that has just reopened on the axis has its two ends close
+C     together by construction, which is not a jet impact.  While it is
+C     still growing the impact test is held off.
+      IF (AXIS_HOLD.AND.CRITER1.GT.2.0D0*CRITER) AXIS_HOLD=.FALSE.
       IF (BUBBLE_TOPOLOGY.EQ.PRE_IMPACT.AND.
-     &CRITER1.LE.CRITER) THEN
+     &CRITER1.LE.CRITER.AND..NOT.AXIS_HOLD) THEN
       IF (.NOT.POSTCOLLAPSE_ENABLED) THEN
       WRITE(*,*) 'CRITER1 IS LESS THAN',CRITER
       STOP
@@ -1905,13 +2126,63 @@ C     copy of node 1, so panel M is the physical closing panel.
       GO TO 821
       ENDIF
       IF (BUBBLE_TOPOLOGY.EQ.PRE_IMPACT) THEN
+C     Find the interior point closest to the axis.
+      JABS=0
+      RABS=1.0D100
       DO 311 J=2,M
-CSAL	IF (R(J).LT.0.02) THEN
+      IF (R(J).LT.RABS) THEN
+      RABS=R(J)
+      JABS=J
+      ENDIF
+  311 CONTINUE
+      IF (JABS.GT.0.AND.RABS.LT.AXIS_ABSORB_RADIUS) THEN
+      CALL ABSORB_ON_AXIS(R,Z,FID,M,JABS,MABS,VDROP,IFAIL)
+      IF (IFAIL.EQ.0) THEN
+      NABSORB=NABSORB+1
+      M=MABS
+      DL(1)=0.0D0
+      DO 2640 J=2,M+1
+      DL(J)=DL(J-1)+DSQRT((R(J)-R(J-1))**2+(Z(J)-Z(J-1))**2)
+ 2640 CONTINUE
+      DO 2641 J=1,M
+      DH(J)=DL(J+1)-DL(J)
+      DLM(J)=DL(J)+0.5D0*(DL(J+1)-DL(J))
+ 2641 CONTINUE
+      CALL CUBSPLR (R,DL,AR,BR,CR,DR,M)
+      CALL CUBSPLZ (Z,DL,AZ,BZ,CZ,DZ,M)
+      CALL CUSPRR (DL,AR,BR,CR,DR,RR,M)
+      CALL CUSPZZ (DL,AZ,BZ,CZ,DZ,ZZ,M)
+      MHL=M+NWALL
+      CALL DEFINEWALL(R,Z,RR,ZZ,M,MHL,WALLR)
+      DO 2642 J=M+1,MHL
+      PSICS(J)=0.0D0
+ 2642 CONTINUE
+      DO 2643 J=M+2,MHL+2
+      UEP(J)=0.0D0
+      VEP(J)=0.0D0
+ 2643 CONTINUE
+      VABSBEF=VOLT
+      CALL FINDVOL (DL,VOLT,M)
+      CALL FINDCEN (DL,CEN,M)
+      RATIO=VOLT/VOLI
+      WRITE(345,*)NABSORB,K-1,POST_STEPS,DTIME,JABS,RABS,M,
+     &VABSBEF,VOLT,VDROP,VDROP/VABSBEF
+      CALL FLUSH(345)
+      WRITE(*,*)'AXIS ABSORBED A PINCHED POINT AT T=',DTIME,
+     &' NODE=',JABS,' R=',RABS
+      WRITE(*,*)'DROPPED PIECE VOLUME=',VDROP,' FRACTION=',
+     &VDROP/VABSBEF,' PANELS NOW=',M
+      VOLUME_PREV_ACCEPTED=VOLT
+      TIME_PREV_ACCEPTED=DTIME
+      GO TO 821
+      ENDIF
+      ENDIF
+      DO 312 J=2,M
       IF (R(J).LT.0.0001) THEN
       PRINT*,'R(J)<0.0001','J=',J,'R(J)=',R(J)
       STOP
       ENDIF
-  311 CONTINUE
+  312 CONTINUE
       ENDIF
 C *** Calculating of the cubic splines for the evolved shape of the bubble ***
 C *** and calculating of the arc lenght of the cubic spline segments.      ***
@@ -2091,6 +2362,27 @@ C *** Calculating of the volume and centroid of the bubble(s) ***
       CALL FINDCEN (DL,CEN,M)
       ENDIF
       RATIO=VOLT/VOLI                       
+C     Once the bubble is whole again the component diagnostic would stop,
+C     since it belongs to the two-component path.  It is kept going here so
+C     the record of the run is continuous across the change of topology:
+C     one live component, no rings, the same seventeen columns.
+      IF (ILS.EQ.2.AND.AXIS_RECONNECTED.AND.
+     &BUBBLE_TOPOLOGY.EQ.PRE_IMPACT) THEN
+      POST_STEPS=POST_STEPS+1
+      PHISUM=0.0D0
+      PHIMIN=1.0D100
+      PHIMAX=-1.0D100
+      DO 2756 J=1,M
+      PHISUM=PHISUM+FID(J)
+      PHIMIN=DMIN1(PHIMIN,FID(J))
+      PHIMAX=DMAX1(PHIMAX,FID(J))
+ 2756 CONTINUE
+      WRITE(333,*)K,POST_STEPS,DTIME,VOLT,VOLT,0.0D0,RATIO,
+     &0.0D0,CEN,0.0D0,EPS*(VOLI/VOLT)**POLYEXP,0.0D0,
+     &0.0D0,0.0D0,0.0D0,0.0D0,VMAX,
+     &PHISUM/DBLE(M),PHIMIN,PHIMAX
+      CALL FLUSH(333)
+      ENDIF
       IF (ILS.EQ.2) THEN
 CSAL      WRITE(16,171)RATIO,CEN
 CSAL      WRITE(41,938)RATIO 
@@ -2330,9 +2622,18 @@ C     fixed.  The following outer iteration performs the same-time BEM solve.
       IF (IFAIL.NE.0) STOP
       PGASCOMP(IC)=PGAS_SPLIT*(VREFCOMP(IC)/VCOMP(IC))**POLYEXP
  2752 CONTINUE
+      PHISUM=0.0D0
+      PHIMIN=1.0D100
+      PHIMAX=-1.0D100
+      DO 2755 J=1,M
+      PHISUM=PHISUM+FID(J)
+      PHIMIN=DMIN1(PHIMIN,FID(J))
+      PHIMAX=DMAX1(PHIMAX,FID(J))
+ 2755 CONTINUE
       WRITE(333,*)K,POST_STEPS,DTIME,VOLT,VCOMP(1),VCOMP(2),RATIO,
      &DVDT_CURRENT,CCOMP(1),CCOMP(2),PGASCOMP(1),PGASCOMP(2),
-     &AVRD(1),CVRD(1),AVRD(2),CVRD(2),MAXVEL_MULTI
+     &AVRD(1),CVRD(1),AVRD(2),CVRD(2),MAXVEL_MULTI,
+     &PHISUM/DBLE(M),PHIMIN,PHIMAX
       CALL FLUSH(333)
       IF (ANY_MULTI_RELOC) THEN
       CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
@@ -3211,6 +3512,170 @@ C     sees two separate loops closing on each other.  This scans every
 C     panel of one against every panel of the other; there are no
 C     neighbours to exclude because the panels belong to different loops.
 C=======================================================================
+C=======================================================================
+C     RETURN OF A TOROIDAL DAUGHTER TO A SIMPLY CONNECTED BUBBLE.
+C
+C     A rebounding torus widens until the liquid column threading its
+C     hole pinches on the axis.  After that pinch no circuit drawn in the
+C     liquid encircles the ring any more, so the liquid domain is simply
+C     connected and its potential is single valued: the ring is dropped
+C     and the circulation goes with it.  That is the mirror of the jet
+C     impact, where a jump is created rather than released, and it leaves
+C     the same kind of surgery behind.
+C
+C     The closed loop is cut on its shortest-radius panel and relabelled
+C     as an open arc running the long way round from one side of the cut
+C     to the other.  Both ends are projected onto the axis, which is the
+C     boundary condition the simply connected solver expects.  They keep
+C     their own heights, so they stay distinct collocation points: the
+C     dimples left above and below the pinch open immediately.
+C=======================================================================
+C=======================================================================
+C     THE CLOSURE TAKES IN A POINT PRESSED ONTO THE AXIS.
+C
+C     After a torus is made whole the walls of its old hole are still in
+C     the contour, running close together above the point where it closed.
+C     A growing bubble stretches that slot until a point in it is pressed
+C     onto the axis, which cuts the contour in two there: the bubble, and
+C     a small piece beyond the pinch.  The larger piece is kept and its
+C     new end laid on the axis - the closure has simply moved along the
+C     slot - and the small piece goes, as any small daughter does.
+C=======================================================================
+      SUBROUTINE ABSORB_ON_AXIS(R,Z,FID,M,JX,MNEW,VDROP,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),FID(NPA)
+      DIMENSION RT(NPA),ZT(NPA),FT(NPA)
+      IFAIL=0
+      IF (JX.LE.2.OR.JX.GE.M) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+C     Volume each side of the pinch, closed on the axis.
+      VA=0.0D0
+      DO 10 J=1,JX-1
+      VA=VA+0.5D0*(R(J)**2+R(J+1)**2)*(Z(J+1)-Z(J))
+   10 CONTINUE
+      VB=0.0D0
+      DO 20 J=JX,M
+      VB=VB+0.5D0*(R(J)**2+R(J+1)**2)*(Z(J+1)-Z(J))
+   20 CONTINUE
+      VA=DABS(VA)*3.14159265358979D0
+      VB=DABS(VB)*3.14159265358979D0
+      IF (VA.GE.VB) THEN
+C     Keep the piece before the pinch; its last node becomes the end.
+      NKEEP=JX
+      VDROP=VB
+      DO 30 J=1,NKEEP
+      RT(J)=R(J)
+      ZT(J)=Z(J)
+   30 CONTINUE
+      DO 40 J=1,NKEEP-1
+      FT(J)=FID(J)
+   40 CONTINUE
+      ELSE
+C     Keep the piece after the pinch; its first node becomes the end.
+      NKEEP=M+2-JX
+      VDROP=VA
+      DO 50 J=1,NKEEP
+      RT(J)=R(JX+J-1)
+      ZT(J)=Z(JX+J-1)
+   50 CONTINUE
+      DO 60 J=1,NKEEP-1
+      FT(J)=FID(JX+J-1)
+   60 CONTINUE
+      ENDIF
+      IF (NKEEP.LT.9) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+      DO 70 J=1,NKEEP
+      R(J)=RT(J)
+      Z(J)=ZT(J)
+   70 CONTINUE
+      DO 80 J=1,NKEEP-1
+      FID(J)=FT(J)
+   80 CONTINUE
+      MNEW=NKEEP-1
+      R(1)=0.0D0
+      R(MNEW+1)=0.0D0
+C     The contour must leave the axis radially at both ends.
+      Z(1)=Z(2)
+      Z(MNEW+1)=Z(MNEW)
+      DO 90 J=1,MNEW+1
+      IF (R(J).LT.0.0D0) R(J)=0.0D0
+      IF (Z(J).LE.0.0D0) THEN
+      IFAIL=3
+      RETURN
+      ENDIF
+   90 CONTINUE
+      IF (DABS(Z(1)-Z(MNEW+1)).LE.1.0D-10) THEN
+      IFAIL=4
+      RETURN
+      ENDIF
+      RETURN
+      END
+
+      SUBROUTINE RECONNECT_ON_AXIS(R,Z,QNODE,GAMMA,JS,JE,RARC,ZARC,
+     &QARC,NARC,ZPINCH,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),QNODE(NPA)
+      DIMENSION RARC(NPA),ZARC(NPA),QARC(NPA)
+      IFAIL=0
+      NC=JE-JS+1
+      IF (NC.LT.8.OR.NC+1.GT.NPA-2) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+C     The single node nearest the axis is where the hole closes.
+      KMIN=1
+      RMIN=1.0D100
+      DO 10 K=1,NC
+      IF (R(JS+K-1).LT.RMIN) THEN
+      RMIN=R(JS+K-1)
+      KMIN=K
+      ENDIF
+   10 CONTINUE
+C     Open the loop at that node and walk once round, back to it.  The node
+C     appears at both ends of the arc; laid on the axis it becomes the point
+C     where the surface has just closed across.  Nothing else is moved, so
+C     the rest of the contour is exactly the torus that was there a step ago
+C     and the bubble carries on from it.
+      DO 20 K=1,NC+1
+      KK=KMIN+K-1
+      NWRAP=0
+   15 IF (KK.GT.NC) THEN
+      KK=KK-NC
+      NWRAP=NWRAP+1
+      GO TO 15
+      ENDIF
+      J=JS+KK-1
+      RARC(K)=R(J)
+      ZARC(K)=Z(J)
+C     The potential gains the circulation once per circuit, so the copy of
+C     the node reached at the far end of the walk carries GAMMA more than
+C     the copy it started from.  That difference is the jump the toroidal
+C     topology was holding, released here exactly as the jet impact creates
+C     one.
+      QARC(K)=QNODE(J)+DBLE(NWRAP)*GAMMA
+   20 CONTINUE
+      NARC=NC+1
+      ZPINCH=ZARC(1)
+      RARC(1)=0.0D0
+      RARC(NARC)=0.0D0
+      ZARC(NARC)=ZARC(1)
+      DO 30 K=1,NARC
+      IF (RARC(K).LT.0.0D0) RARC(K)=0.0D0
+      IF (ZARC(K).LE.0.0D0) THEN
+      IFAIL=3
+      RETURN
+      ENDIF
+   30 CONTINUE
+      RETURN
+      END
+
+
       SUBROUTINE FIND_INTERCOMPONENT_DISTANCE(DL,AR,BR,CR,DR,
      &AZ,BZ,CZ,DZ,JS1,JE1,JS2,JE2,DMIN,JAOUT,JBOUT,FAOUT,FBOUT,
      &RAOUT,ZAOUT,RBOUT,ZBOUT,HLOCAL,IINTERSECT,IFAIL)
@@ -4428,6 +4893,8 @@ C     part of the flow and is kept and evolved as a second component.
       DOUBLE PRECISION LDOM,LSAT
       DIMENSION RDMIN(MAXVR),RETA(MAXVR)
       DIMENSION RO(NPA),ZO(NPA),QRO(NPA),QTO(NPA),PSIO(NPA)
+      DIMENSION ISTMP(MAXCOMP),IETMP(MAXCOMP)
+      DIMENSION VTMP(MAXCOMP),CTMP(MAXCOMP)
       DIMENSION AR0(NPA),BR0(NPA),CR0(NPA),DR0(NPA)
       DIMENSION AZ0(NPA),BZ0(NPA),CZ0(NPA),DZ0(NPA)
       DIMENSION DL0(NPA),DLM0(NPA),RR0(NPA),ZZ0(NPA)
@@ -4639,15 +5106,6 @@ C     precontact 1.1E-6 gap.
       IFAIL=22
       RETURN
       ENDIF
-      DO 70 IC=1,NCOMP
-      CALL FIND_COMPONENT_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,
-     &AZ,BZ,CZ,DZ,ISTART(IC),IEND(IC),AVRD(IC),CVRD(IC),
-     &RDMIN(IC),HDUM,RETA(IC),IERR)
-      IF (IERR.NE.0) THEN
-      IFAIL=22+IC
-      RETURN
-      ENDIF
-   70 CONTINUE
 C=======================================================================
 C     WHAT BECOMES OF THE SMALLER DAUGHTER.
 C
@@ -4672,12 +5130,30 @@ C     discarded loop's bookkeeping in slot 2 so the caller can report it.
 C     When both are kept it returns NCOMP=2 and slot 2 is a live
 C     component.
 C=======================================================================
-      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,CCOMP,
-     &VBOTH,CBOTH,IERR)
+C     Each loop is measured on its own so that one bad loop does not veto
+C     the whole split.  A contact can pinch off a fold whose two sides are
+C     a fraction of a panel apart; that sliver encloses no usable volume
+C     and its area can even come out non-positive.  Such a loop is simply
+C     marked as having none, which makes it the one discarded below - the
+C     same outcome the split would reach anyway, without failing first.
+      DO 68 IC=1,2
+      ISTMP(1)=ISTART(IC)
+      IETMP(1)=IEND(IC)
+      CALL FIND_COMPONENT_VOLUMES(DL,1,ISTMP,IETMP,VTMP,CTMP,
+     &VONE,CONE,IERR)
       IF (IERR.NE.0) THEN
+      VCOMP(IC)=-1.0D0
+      CCOMP(IC)=0.0D0
+      ELSE
+      VCOMP(IC)=VTMP(1)
+      CCOMP(IC)=CTMP(1)
+      ENDIF
+   68 CONTINUE
+      IF (VCOMP(1).LE.0.0D0.AND.VCOMP(2).LE.0.0D0) THEN
       IFAIL=33
       RETURN
       ENDIF
+      VBOTH=DMAX1(VCOMP(1),0.0D0)+DMAX1(VCOMP(2),0.0D0)
 C     The loop that encloses less volume is the one discarded.  The
 C     surgery names the loops from their arc lengths, and a long thin arc
 C     can enclose less than a short fat one, so the choice is made on the
@@ -4689,11 +5165,24 @@ C     volumes just measured rather than on that naming.
       CSATKEEP=CCOMP(IDROP)
       GSATKEEP=GAMMAD(IDROP)
       MSATKEEP=MCOMP(IDROP)
-      SMALLFRAC=VCOMP(IDROP)/VBOTH
+      SMALLFRAC=DMAX1(VCOMP(IDROP),0.0D0)/VBOTH
+      IF (VCOMP(IDROP).LE.0.0D0) THEN
+      WRITE(*,*)'DEGENERATE SLIVER AT THE SPLIT - DISCARDED'
+      VSATKEEP=0.0D0
+      ENDIF
       IF (SMALLFRAC.GT.DISCARD_FRACTION) THEN
-C     Comparable daughters: keep both and evolve them.
+C     Comparable daughters: keep both and evolve them.  Both need rings.
       WRITE(*,*)'BOTH DAUGHTERS KEPT: SMALLER FRACTION=',SMALLFRAC,
      &' LIMIT=',DISCARD_FRACTION
+      DO 70 IC=1,NCOMP
+      CALL FIND_COMPONENT_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ISTART(IC),IEND(IC),AVRD(IC),CVRD(IC),
+     &RDMIN(IC),HDUM,RETA(IC),IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=22+IC
+      RETURN
+      ENDIF
+   70 CONTINUE
       CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
      &AVRD,CVRD,GAMMAD,2,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,
      &MNEW,IERR)
@@ -4713,11 +5202,7 @@ C     Comparable daughters: keep both and evolve them.
       QOLDN(K)=QOLDN(J)
    71 CONTINUE
       MCOMP(1)=MCOMP(2)
-      AVRD(1)=AVRD(2)
-      CVRD(1)=CVRD(2)
       GAMMAD(1)=GAMMAD(2)
-      RDMIN(1)=RDMIN(2)
-      RETA(1)=RETA(2)
       VCOMP(1)=VCOMP(2)
       CCOMP(1)=CCOMP(2)
       ENDIF
@@ -4744,6 +5229,16 @@ C     a retained first loop already carries a standalone parameterisation.
       RETURN
       ENDIF
       ENDIF
+C     Only the surviving loop needs a ring.
+      CALL FIND_COMPONENT_RELOCATED_RING(R,Z,DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,ISTART(1),IEND(1),AVRD(1),CVRD(1),
+     &RDMIN(1),HDUM,RETA(1),IERR)
+      IF (IERR.NE.0) THEN
+      IFAIL=23
+      RETURN
+      ENDIF
+      AVRD(2)=0.0D0
+      CVRD(2)=0.0D0
       CALL COMPUTE_DAUGHTER_QVR(DL,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
      &AVRD,CVRD,GAMMAD,1,NCOMP,ISTART,IEND,QVR,QVRN,QVRJUMP,
      &MNEW,IERR)
