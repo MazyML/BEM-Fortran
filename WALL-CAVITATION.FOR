@@ -177,6 +177,34 @@ C     A piece this large is not a neck being pinched off, it is a second
 C     component, and deleting it would be discarding a live daughter.
 C     The absorption refuses it and leaves it for a genuine split.
       PARAMETER (AXIS_ABSORB_MAX_DROP=1.0D-2)
+C=======================================================================
+C     SLIVERS FOLDED OUT OF THE SURFACE
+C
+C     The axis absorption above takes in a neck that has been pinched
+C     against the axis.  The same thing happens away from the axis: a
+C     tongue of surface folds back on itself and leaves a flap a few
+C     panels long and no thickness at all, its two walls running
+C     anti-parallel a tenth of a panel apart.  It is not a bubble and it
+C     is not resolved - it is the trace of an earlier surgery being
+C     stretched by the flow - but the boundary integrals see two surfaces
+C     almost touching and the surface speed runs away from it: in the
+C     continuation this took VMAX from 3 to 7200 in two steps and stopped
+C     the clock, two steps after the bubble had been made whole again.
+C
+C     A fold this thin, measured against the panels that would have to
+C     resolve it, is taken out: the nodes between the two walls are
+C     removed and the walls joined at their midpoint, which is the axis
+C     absorption performed against the surface itself rather than against
+C     r=0.
+      PARAMETER (SLIVER_GAP_RATIO=0.5D0)
+C     What it may cost.  The same ceiling the axis absorption uses: a
+C     piece larger than this is not a fold being trimmed, it is part of
+C     the bubble, and the excision is refused so that a real pinch still
+C     reaches the checks that handle one.
+      PARAMETER (SLIVER_MAX_DROP=1.0D-2)
+      INTEGER NSLIVER,SLIVER_IA,SLIVER_JB,MSLIVER
+      DOUBLE PRECISION SLIVER_DMIN,SLIVER_HLOCAL,SLIVER_RATIO
+      DOUBLE PRECISION VSLIVBEF,VSLIVDROP
 C     A rebounding torus whose hole has closed is made whole again: the loop
 C     is cut at the hole, the opening trimmed, the two ends laid on the axis
 C     and the ring released, leaving the same simply connected bubble the run
@@ -193,6 +221,49 @@ C     7E-12, so this separates them by more than a decade either way.
       PARAMETER (DT_FLOOR=1.0D-9)
 C     Accepted steps between daughter smoothings.  Zero disables it.
       PARAMETER (NSMOOTH=10)
+C=======================================================================
+C     CORNER RELIEF: A SPLINE OVERSHOOT IS NOT A CONTACT
+C
+C     The geometry the solver works on is a cubic spline through the
+C     nodes, and a cubic spline through a sharp corner overshoots it.  The
+C     scar a coalescence leaves is exactly such a corner: there the two
+C     walls of the merged waist sit a third of a panel apart at the nodes,
+C     the panel chords between them close to a twelfth of one, and the
+C     spline that interpolates the same nodes dips to a fortieth.  Both
+C     the contact test and the boundary integrals see the spline, so the
+C     run cuts the loop on an interpolation artifact, merges the pieces
+C     back together a hundred steps later and cuts again - two dozen
+C     surgeries and a dozen restarts that between them buy 1E-3 of
+C     physical time.
+C
+C     A candidate contact is therefore checked against the panel chords
+C     before it is believed.  If the chords have not themselves reached
+C     the capture ratio, the approach belongs to the interpolation and not
+C     to the surface: the loop is smoothed until the spline agrees with
+C     the chords again and re-solved at the same physical time, instead of
+C     being cut.  Only a gap the chords agree on is a contact.
+C
+C     The spline must be undercutting the chords by this factor before the
+C     difference is put down to the reconstruction.
+      PARAMETER (RELIEF_OVERSHOOT=2.0D0)
+C     Relief is looked for from twice the capture ratio down, so a corner
+C     is taken out while the boundary integrals either side of it are
+C     still clean.
+      PARAMETER (RELIEF_TRIGGER=2.0D0)
+C     A relieved corner is smoothed until the spline stands this many
+C     capture ratios clear, so that it does not come straight back on the
+C     next step.
+      PARAMETER (RELIEF_TARGET=5.0D0)
+C     Smoothing passes allowed in one relief, and reliefs allowed at one
+C     approach.  A corner opens in a handful of passes; an approach that
+C     is still there after this many reliefs is the surface arriving and
+C     is captured as a contact.
+      PARAMETER (NRELIEF_PASS=20)
+      PARAMETER (NRELIEF_MAX=40)
+      INTEGER NRELIEF,NRELIEF_CONSEC,CHORD_JA,CHORD_JB,NPASS_USED
+      DOUBLE PRECISION CHORD_DMIN,CHORD_HLOCAL,CHORD_RATIO
+      DOUBLE PRECISION VRELBEF(MAXCOMP),CRELBEF(MAXCOMP)
+      DOUBLE PRECISION VOLRELB,CENRELB,RELSCL,RELREL,RELIEF_RATIO0
 C=======================================================================
 C     ENERGY LOSS AT THE COLLAPSE-REBOUND
 C
@@ -301,6 +372,16 @@ C	OPEN(UNIT=3000,FILE='NOZ.plt')
       WRITE(323,*)'# ACCEPTED_STEP POST_STEP TIME OLD_A OLD_C NEW_A',
      &' NEW_C CIRC DMIN_OLD ETA_OLD DMIN_NEW ETA_NEW MAXUVR_OLD',
      &' MAXUVR_NEW MAX_Q_ERROR QREM_CLOSURE'
+      OPEN(UNIT=349,FILE='SLIVER_EXCISION_DIAG.dat',STATUS='REPLACE')
+      WRITE(349,*)'# EVENT ACCEPTED_STEP POST_STEP TIME NODE_A NODE_B',
+     &' GAP HLOCAL RATIO PANELS_BEFORE PANELS_AFTER VOLUME_BEFORE',
+     &' VOLUME_AFTER VOLUME_DROPPED FRACTION VMAX'
+      OPEN(UNIT=348,FILE='CORNER_RELIEF_DIAG.dat',STATUS='REPLACE')
+      WRITE(348,*)'# ACCEPTED_STEP POST_STEP TIME RELIEF PASSES',
+     &' SPLINE_DMIN SPLINE_HLOCAL SPLINE_RATIO_BEFORE',
+     &' SPLINE_RATIO_AFTER CHORD_DMIN CHORD_HLOCAL CHORD_RATIO',
+     &' SPLINE_PANELS CHORD_PANELS VOLUME_BEFORE VOLUME_AFTER',
+     &' RELATIVE VMAX'
       OPEN(UNIT=324,FILE='REBOUND_DIAG.dat',STATUS='REPLACE')
       WRITE(324,*)'# ACCEPTED_STEP POST_STEP TIME VOLUME V_OVER_V0',
      &' DVDT REBOUND_STATE'
@@ -400,6 +481,9 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       NREDIST=0
       NRETIRED=0
       NMERGED=0
+      NRELIEF=0
+      NSLIVER=0
+      NRELIEF_CONSEC=0
       NAXIS=0
       NABSORB=0
       AXIS_RECONNECTED=.FALSE.
@@ -1690,6 +1774,142 @@ C=======================================================================
       CALL FLUSH(327)
       CAPTURE_USE=CONTACT_CAPTURE_RATIO
       IF (ISOLO.EQ.2) CAPTURE_USE=CONTACT_CAPTURE_SOLO
+C=======================================================================
+C     CORNER RELIEF.  See the note beside RELIEF_OVERSHOOT above.  The
+C     chords are the surface the panels actually carry; the spline only
+C     interpolates them.  When the spline dips well inside the chords the
+C     approach belongs to the interpolation, so the corner is smoothed out
+C     and the state re-solved at the same physical time rather than cut.
+C=======================================================================
+      IF (CONTACT_GAP_RATIO.GT.RELIEF_TRIGGER*CAPTURE_USE)
+     &NRELIEF_CONSEC=0
+C     Only the daughters.  The corner this relieves is a coalescence
+C     scar, and only a daughter has been through a coalescence; the
+C     parent's toroidal contact is the validated second impact the whole
+C     continuation is built on, and relieving it defers a split the run
+C     cannot then do without.
+      IRELIEF=0
+      IF (ISOLO.EQ.2.AND.
+     &CONTACT_GAP_RATIO.LE.RELIEF_TRIGGER*CAPTURE_USE.AND.
+     &NRELIEF_CONSEC.LT.NRELIEF_MAX) THEN
+      CALL FIND_MIN_NONNEIGHBOR_CHORD_DISTANCE(R,Z,CHORD_DMIN,
+     &CHORD_JA,CHORD_JB,CHORD_HLOCAL,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO MEASURE PANEL-CHORD SEPARATION'
+      STOP
+      ENDIF
+      CHORD_RATIO=CHORD_DMIN/CHORD_HLOCAL
+      IF (CHORD_RATIO.GT.CAPTURE_USE.AND.
+     &CHORD_DMIN.GT.RELIEF_OVERSHOOT*CONTACT_DMIN) IRELIEF=1
+      ENDIF
+      IF (IRELIEF.EQ.1) THEN
+      RELIEF_RATIO0=CONTACT_GAP_RATIO
+      NPASS_USED=0
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      CALL FINDVOL(DL,VOLRELB,M)
+      CALL FINDCEN(DL,CENRELB,M)
+      ELSE
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VRELBEF,
+     &CRELBEF,VOLRELB,CENRELB,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO MEASURE VOLUME BEFORE CORNER RELIEF'
+      STOP
+      ENDIF
+      ENDIF
+C     Smooth until the spline stops undercutting the chords, so that the
+C     same corner does not come back on the very next step.
+      DO 2664 IPASS=1,NRELIEF_PASS
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      CALL SMOOTH_CLOSED_LOOP(R,Z,FID,1,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO RELIEVE TOROIDAL CORNER',IFAIL
+      STOP
+      ENDIF
+      CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
+      ELSE
+      CALL SMOOTH_DAUGHTER_LOOPS(R,Z,FID,NCOMP,ISTART,IEND,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO RELIEVE DAUGHTER CORNER',IFAIL
+      STOP
+      ENDIF
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,M,IFAIL)
+      ENDIF
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO REBUILD GEOMETRY DURING CORNER RELIEF'
+      STOP
+      ENDIF
+      NPASS_USED=IPASS
+      CALL FIND_MIN_NONNEIGHBOR_SPLINE_DISTANCE(DL,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,CONTACT_DMIN,CONTACT_JA,CONTACT_JB,CONTACT_FA,
+     &CONTACT_FB,CONTACT_RA,CONTACT_ZA,CONTACT_RB,CONTACT_ZB,
+     &CONTACT_HLOCAL,CONTACT_INTERSECT,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO REMEASURE SEPARATION DURING RELIEF'
+      STOP
+      ENDIF
+      CONTACT_GAP_RATIO=CONTACT_DMIN/CONTACT_HLOCAL
+      IF (CONTACT_GAP_RATIO.GE.RELIEF_TARGET*CAPTURE_USE) GO TO 2665
+ 2664 CONTINUE
+ 2665 CONTINUE
+C     Put the volume the filter shaved off back, each loop about its own
+C     centroid, exactly as the periodic daughter smoothing does.
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      CALL FINDVOL(DL,VOLT,M)
+      RELSCL=(VOLRELB/VOLT)**(1.0D0/3.0D0)
+      DO 2666 J=1,M+1
+      R(J)=RELSCL*R(J)
+      Z(J)=CENRELB+RELSCL*(Z(J)-CENRELB)
+ 2666 CONTINUE
+      CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO REBUILD TOROIDAL GEOMETRY AFTER RELIEF'
+      STOP
+      ENDIF
+      CALL FINDVOL(DL,VOLT,M)
+      CALL FINDCEN(DL,CEN,M)
+      ELSE
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,CCOMP,
+     &VOLT,CEN,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'INVALID VOLUME AFTER CORNER RELIEF'
+      STOP
+      ENDIF
+      DO 2668 IC=1,NCOMP
+      RELSCL=(VRELBEF(IC)/VCOMP(IC))**(1.0D0/3.0D0)
+      DO 2667 J=ISTART(IC),IEND(IC)+1
+      R(J)=RELSCL*R(J)
+      Z(J)=CCOMP(IC)+RELSCL*(Z(J)-CCOMP(IC))
+ 2667 CONTINUE
+ 2668 CONTINUE
+      CALL REBUILD_DAUGHTER_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
+     &AZ,BZ,CZ,DZ,RR,ZZ,NCOMP,ISTART,IEND,M,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'FAILED TO REBUILD GEOMETRY AFTER RELIEF RESCALE'
+      STOP
+      ENDIF
+      CALL FIND_COMPONENT_VOLUMES(DL,NCOMP,ISTART,IEND,VCOMP,CCOMP,
+     &VOLT,CEN,IFAIL)
+      IF (IFAIL.NE.0) THEN
+      WRITE(*,*)'INVALID VOLUME AFTER RELIEF RESCALE'
+      STOP
+      ENDIF
+      ENDIF
+      NRELIEF=NRELIEF+1
+      NRELIEF_CONSEC=NRELIEF_CONSEC+1
+      RELREL=(VOLT-VOLRELB)/VOLRELB
+      WRITE(348,*)K-1,POST_STEPS,DTIME,NRELIEF_CONSEC,NPASS_USED,
+     &CONTACT_DMIN,CONTACT_HLOCAL,RELIEF_RATIO0,CONTACT_GAP_RATIO,
+     &CHORD_DMIN,CHORD_HLOCAL,CHORD_RATIO,
+     &CONTACT_JA,CONTACT_JB,CHORD_JA,CHORD_JB,
+     &VOLRELB,VOLT,RELREL,VMAX
+      CALL FLUSH(348)
+      VOLUME_PREV_ACCEPTED=VOLT
+      TIME_PREV_ACCEPTED=DTIME
+      GO TO 821
+      ENDIF
       ICAPT=0
       IF (CONTACT_GAP_RATIO.LE.CAPTURE_USE) THEN
       IF (ISOLO.EQ.2.OR.CONTACT_CLOSING.GT.0.0D0) ICAPT=1
@@ -2300,6 +2520,62 @@ C     the panels that have to resolve it.
       VOLUME_PREV_ACCEPTED=VOLT
       TIME_PREV_ACCEPTED=DTIME
       GO TO 821
+      ENDIF
+      ENDIF
+C=======================================================================
+C     THE SURFACE PINCHED AGAINST ITSELF AWAY FROM THE AXIS.  See the
+C     note beside SLIVER_GAP_RATIO above.  Measured on the nodes, because
+C     it is the nodes the panels are built on: a fold whose two walls are
+C     within half a panel of each other, and which encloses nothing, is
+C     taken out and the walls joined.
+C=======================================================================
+      CALL FIND_MIN_NONNEIGHBOR_NODE_PAIR(R,Z,M,SLIVER_DMIN,
+     &SLIVER_IA,SLIVER_JB,SLIVER_HLOCAL,IFAIL)
+      IF (IFAIL.EQ.0) THEN
+      SLIVER_RATIO=SLIVER_DMIN/SLIVER_HLOCAL
+      IF (SLIVER_RATIO.LE.SLIVER_GAP_RATIO) THEN
+      VSLIVBEF=VOLT
+      CALL EXCISE_SLIVER(R,Z,FID,M,SLIVER_IA,SLIVER_JB,MSLIVER,
+     &VSLIVDROP,IFAIL)
+      IF (IFAIL.EQ.0) THEN
+      NSLIVER=NSLIVER+1
+      M=MSLIVER
+      DL(1)=0.0D0
+      DO 2680 J=2,M+1
+      DL(J)=DL(J-1)+DSQRT((R(J)-R(J-1))**2+(Z(J)-Z(J-1))**2)
+ 2680 CONTINUE
+      DO 2681 J=1,M
+      DH(J)=DL(J+1)-DL(J)
+      DLM(J)=DL(J)+0.5D0*(DL(J+1)-DL(J))
+ 2681 CONTINUE
+      CALL CUBSPLR (R,DL,AR,BR,CR,DR,M)
+      CALL CUBSPLZ (Z,DL,AZ,BZ,CZ,DZ,M)
+      CALL CUSPRR (DL,AR,BR,CR,DR,RR,M)
+      CALL CUSPZZ (DL,AZ,BZ,CZ,DZ,ZZ,M)
+      MHL=M+NWALL
+      CALL DEFINEWALL(R,Z,RR,ZZ,M,MHL,WALLR)
+      DO 2682 J=M+1,MHL
+      PSICS(J)=0.0D0
+ 2682 CONTINUE
+      DO 2683 J=M+2,MHL+2
+      UEP(J)=0.0D0
+      VEP(J)=0.0D0
+ 2683 CONTINUE
+      CALL FINDVOL (DL,VOLT,M)
+      CALL FINDCEN (DL,CEN,M)
+      RATIO=VOLT/VOLI
+      WRITE(349,*)NSLIVER,K-1,POST_STEPS,DTIME,SLIVER_IA,SLIVER_JB,
+     &SLIVER_DMIN,SLIVER_HLOCAL,SLIVER_RATIO,M+SLIVER_JB-SLIVER_IA,
+     &M,VSLIVBEF,VOLT,VSLIVDROP,VSLIVDROP/VSLIVBEF,VMAX
+      CALL FLUSH(349)
+      WRITE(*,*)'EXCISED A FOLDED SLIVER AT T=',DTIME,
+     &' NODES=',SLIVER_IA,SLIVER_JB,' GAP/H=',SLIVER_RATIO
+      WRITE(*,*)'DROPPED PIECE VOLUME=',VSLIVDROP,' FRACTION=',
+     &VSLIVDROP/VSLIVBEF,' PANELS NOW=',M
+      VOLUME_PREV_ACCEPTED=VOLT
+      TIME_PREV_ACCEPTED=DTIME
+      GO TO 821
+      ENDIF
       ENDIF
       ENDIF
       DO 312 J=2,M
@@ -3666,6 +3942,158 @@ C     a small piece beyond the pinch.  The larger piece is kept and its
 C     new end laid on the axis - the closure has simply moved along the
 C     slot - and the small piece goes, as any small daughter does.
 C=======================================================================
+C=======================================================================
+C     CLOSEST NON-NEIGHBOURING PAIR OF NODES ON A SIMPLY CONNECTED ARC.
+C
+C     Nodes rather than splines or chords: what is wanted here is a fold
+C     of the surface, and a fold shows itself as two nodes that are close
+C     together while being far apart along the contour.  The two ends sit
+C     on the axis and their approach is the jet impact, which CRITER1
+C     tests for, so that one pair is left out.
+C=======================================================================
+      SUBROUTINE FIND_MIN_NONNEIGHBOR_NODE_PAIR(R,Z,M,DMIN,IOUT,JOUT,
+     &HLOCAL,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      INTEGER IOUT,JOUT
+      DIMENSION R(NPA),Z(NPA)
+      DMIN=1.0D100
+      IOUT=0
+      JOUT=0
+      DO 20 I=1,M-1
+      DO 10 J=I+2,M+1
+      IF (I.EQ.1.AND.J.EQ.M+1) GO TO 10
+      DD=DSQRT((R(J)-R(I))**2+(Z(J)-Z(I))**2)
+      IF (DD.LT.DMIN) THEN
+      DMIN=DD
+      IOUT=I
+      JOUT=J
+      ENDIF
+   10 CONTINUE
+   20 CONTINUE
+      IF (IOUT.EQ.0.OR.JOUT.EQ.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+C     The panel scale the fold would have to be resolved on: the panels
+C     that arrive at each of the two nodes.
+      HA=DSQRT((R(IOUT+1)-R(IOUT))**2+(Z(IOUT+1)-Z(IOUT))**2)
+      HB=DSQRT((R(JOUT)-R(JOUT-1))**2+(Z(JOUT)-Z(JOUT-1))**2)
+      HLOCAL=0.5D0*(HA+HB)
+      IF (HLOCAL.LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      IFAIL=0
+      RETURN
+      END
+
+C=======================================================================
+C     TRIM A FOLDED SLIVER OUT OF A SIMPLY CONNECTED CONTOUR.
+C
+C     Nodes IA and JB are the two walls of the fold.  Everything between
+C     them is the sliver; it is removed and the two walls are joined at
+C     their midpoint, which leaves the panels either side of the join
+C     their own length instead of the sub-panel stub a plain deletion
+C     would leave.  The panel potentials follow their panels: the ones
+C     before the fold keep theirs, the ones after it keep theirs, and the
+C     joining panel takes the potential of the wall it continues into.
+C
+C     The volume the sliver encloses is measured first and the excision
+C     refused if it is more than SLIVER_MAX_DROP of the bubble, so that a
+C     genuine pinch - one that would divide the bubble - is left to the
+C     checks that handle a topology change.  The ends are refused too:
+C     a fold that reaches the axis is the axis absorption's business, and
+C     it keeps the end on r=0 where this would not.
+C=======================================================================
+      SUBROUTINE EXCISE_SLIVER(R,Z,FID,M,IA,JB,MNEW,VDROP,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+C     Declared here as well as in the main program: a PARAMETER of the
+C     main program is not in scope inside a subroutine.
+      PARAMETER (SLIVER_MAX_DROP=1.0D-2)
+      DIMENSION R(NPA),Z(NPA),FID(NPA)
+      DIMENSION RT(NPA),ZT(NPA),FT(NPA)
+      IFAIL=0
+      IF (IA.LT.2.OR.JB.GT.M.OR.JB.LT.IA+2) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      MNEW=M-(JB-IA)
+      IF (MNEW.LT.9) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+C     Volume of the whole bubble, and of the piece the fold encloses,
+C     closed by the chord from JB back to IA.
+      VTOT=0.0D0
+      DO 10 J=1,M
+      VTOT=VTOT+0.5D0*(R(J)**2+R(J+1)**2)*(Z(J+1)-Z(J))
+   10 CONTINUE
+      VSL=0.0D0
+      DO 20 J=IA,JB-1
+      VSL=VSL+0.5D0*(R(J)**2+R(J+1)**2)*(Z(J+1)-Z(J))
+   20 CONTINUE
+      VSL=VSL+0.5D0*(R(JB)**2+R(IA)**2)*(Z(IA)-Z(JB))
+      VTOT=DABS(VTOT)*3.14159265358979D0
+      VSL=DABS(VSL)*3.14159265358979D0
+      VDROP=VSL
+      IF (VTOT.LE.0.0D0) THEN
+      IFAIL=3
+      RETURN
+      ENDIF
+      IF (VSL/VTOT.GT.SLIVER_MAX_DROP) THEN
+      IFAIL=4
+      RETURN
+      ENDIF
+C     Nodes: everything up to IA-1, the join, then everything from JB+1.
+      DO 30 J=1,IA-1
+      RT(J)=R(J)
+      ZT(J)=Z(J)
+   30 CONTINUE
+      RT(IA)=0.5D0*(R(IA)+R(JB))
+      ZT(IA)=0.5D0*(Z(IA)+Z(JB))
+      DO 40 J=JB+1,M+1
+      RT(IA+J-JB)=R(J)
+      ZT(IA+J-JB)=Z(J)
+   40 CONTINUE
+C     Panels: the ones before the fold keep their potential, the joining
+C     panel takes the potential of the wall it runs into, and the rest
+C     follow from there.
+      DO 50 J=1,IA-1
+      FT(J)=FID(J)
+   50 CONTINUE
+      DO 60 J=JB,M
+      FT(IA+J-JB)=FID(J)
+   60 CONTINUE
+      DO 70 J=1,MNEW+1
+      IF (RT(J).LT.0.0D0) THEN
+      IFAIL=5
+      RETURN
+      ENDIF
+      IF (ZT(J).LE.0.0D0) THEN
+      IFAIL=5
+      RETURN
+      ENDIF
+   70 CONTINUE
+      DO 80 J=1,MNEW
+      IF (DSQRT((RT(J+1)-RT(J))**2+(ZT(J+1)-ZT(J))**2).LT.1.0D-8) THEN
+      IFAIL=6
+      RETURN
+      ENDIF
+   80 CONTINUE
+      DO 90 J=1,MNEW+1
+      R(J)=RT(J)
+      Z(J)=ZT(J)
+   90 CONTINUE
+      DO 95 J=1,MNEW
+      FID(J)=FT(J)
+   95 CONTINUE
+      R(1)=0.0D0
+      R(MNEW+1)=0.0D0
+      RETURN
+      END
+
       SUBROUTINE ABSORB_ON_AXIS(R,Z,FID,M,JX,MNEW,VDROP,IFAIL)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NPA=600)
@@ -6047,6 +6475,102 @@ C     Endpoint 4 projected onto segment 1--2.
       RETURN
       ENDIF
       IFAIL=0
+      RETURN
+      END
+
+C=======================================================================
+C     MINIMUM SEPARATION OF THE PANEL CHORDS.
+C
+C     The companion of FIND_MIN_NONNEIGHBOR_SPLINE_DISTANCE, measured on
+C     the straight panels through the nodes instead of on the spline that
+C     interpolates them.  The two agree on a surface that is genuinely
+C     approaching itself and disagree by an order of magnitude at a sharp
+C     corner, where the spline overshoots the nodes; that disagreement is
+C     what separates a contact from an artifact of the reconstruction.
+C     Adjacent panels and the pair that closes the loop are skipped, as
+C     they are in the spline measure.
+C=======================================================================
+      SUBROUTINE FIND_MIN_NONNEIGHBOR_CHORD_DISTANCE(R,Z,DMIN,
+     &JAOUT,JBOUT,HLOCAL,M,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      INTEGER JAOUT,JBOUT
+      DIMENSION R(NPA),Z(NPA)
+      DMIN=1.0D100
+      JAOUT=0
+      JBOUT=0
+      DO 20 JA=1,M-1
+      DO 10 JB=JA+1,M
+      IF (JB.EQ.JA+1) GO TO 10
+      IF (JA.EQ.1.AND.JB.EQ.M) GO TO 10
+      CALL LINE_SEGMENT_SEPARATION(R(JA),Z(JA),R(JA+1),Z(JA+1),
+     &R(JB),Z(JB),R(JB+1),Z(JB+1),DD,AA,BB,ISEG)
+      IF (DD.LT.DMIN) THEN
+      DMIN=DD
+      JAOUT=JA
+      JBOUT=JB
+      ENDIF
+   10 CONTINUE
+   20 CONTINUE
+      IF (JAOUT.EQ.0.OR.JBOUT.EQ.0) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      HA=DSQRT((R(JAOUT+1)-R(JAOUT))**2+(Z(JAOUT+1)-Z(JAOUT))**2)
+      HB=DSQRT((R(JBOUT+1)-R(JBOUT))**2+(Z(JBOUT+1)-Z(JBOUT))**2)
+      HLOCAL=0.5D0*(HA+HB)
+      IF (HLOCAL.LE.1.0D-12) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      IFAIL=0
+      RETURN
+      END
+
+C=======================================================================
+C     THE DAUGHTER FILTER APPLIED TO ONE CLOSED LOOP.
+C
+C     SMOOTH_DAUGHTER_LOOPS walks the component table; a toroidal bubble
+C     has no component table, only the single closed loop 1..M, so the
+C     same five-point (-1,4,10,4,-1)/16 operator on the periodic index is
+C     offered here directly.
+C=======================================================================
+      SUBROUTINE SMOOTH_CLOSED_LOOP(R,Z,FID,JS,JE,IFAIL)
+      IMPLICIT DOUBLE PRECISION (A-H,O-Z)
+      PARAMETER (NPA=600)
+      DIMENSION R(NPA),Z(NPA),FID(NPA)
+      DIMENSION RS(NPA),ZS(NPA),FS(NPA)
+      IFAIL=0
+      NC=JE-JS+1
+      IF (NC.LT.8) THEN
+      IFAIL=1
+      RETURN
+      ENDIF
+      DO 10 KK=1,NC
+      KM2=MOD(KK-3+2*NC,NC)+1
+      KM1=MOD(KK-2+2*NC,NC)+1
+      KP1=MOD(KK,NC)+1
+      KP2=MOD(KK+1,NC)+1
+      RS(KK)=(-R(JS+KM2-1)+4.0D0*R(JS+KM1-1)+10.0D0*R(JS+KK-1)
+     &+4.0D0*R(JS+KP1-1)-R(JS+KP2-1))/16.0D0
+      ZS(KK)=(-Z(JS+KM2-1)+4.0D0*Z(JS+KM1-1)+10.0D0*Z(JS+KK-1)
+     &+4.0D0*Z(JS+KP1-1)-Z(JS+KP2-1))/16.0D0
+      FS(KK)=(-FID(JS+KM2-1)+4.0D0*FID(JS+KM1-1)
+     &+10.0D0*FID(JS+KK-1)+4.0D0*FID(JS+KP1-1)
+     &-FID(JS+KP2-1))/16.0D0
+   10 CONTINUE
+      DO 20 KK=1,NC
+      J=JS+KK-1
+      IF (RS(KK).LE.0.0D0.OR.ZS(KK).LE.0.0D0) THEN
+      IFAIL=2
+      RETURN
+      ENDIF
+      R(J)=RS(KK)
+      Z(J)=ZS(KK)
+      FID(J)=FS(KK)
+   20 CONTINUE
+      R(JE+1)=R(JS)
+      Z(JE+1)=Z(JS)
       RETURN
       END
 
