@@ -278,6 +278,41 @@ C     bubble", J. Fluid Mech. 570, 407 (2007).  Measurements put the
 C     loss at 60 to 70 per cent of the bubble energy per cycle, so
 C     ENERGY_RETAINED is what survives one collapse.
       PARAMETER (ENERGY_RETAINED=0.35D0)
+C     How far the bubble must have risen clear of the smallest volume the
+C     run has seen before the minimum counts as passed.  The turn cannot
+C     be recognised at the instant it happens - the volume is stationary
+C     there - so some margin is unavoidable, and five per cent of volume
+C     is under two per cent of radius.
+C
+C     A derivative test is what one would reach for, and the rebound
+C     detector below is one, but it cannot be used here: it needs a
+C     negative-to-positive crossing followed by five clean increments,
+C     and the split, the coalescence and the restart at every generation
+C     boundary all reset it.  Through the chatter around the minimum it
+C     confirmed nothing at all, and the collapse ran on with no jump
+C     until the bubble reached a thousand times its initial volume.  The
+C     smallest volume seen so far is immune to all of that.
+      PARAMETER (ENERGY_JUMP_RISE=1.05D0)
+      DOUBLE PRECISION VMIN_SEEN
+      INTEGER IJUMPDONE
+C     Where the jump is applied.  It stands for the shock radiated at the
+C     collapse, so it belongs at the minimum-volume instant and nowhere
+C     else.  It used to be applied inside the axis reconnection, on the
+C     reasoning that the hole closing onto the axis was that instant.
+C     That held while the hole closed within a few steps of the minimum.
+C     It no longer does: the daughters now survive and grow for a long
+C     time before the hole finally closes, and in the continuation the
+C     reconnection arrived at V/V0 = 6.4E-2, seventy-eight times the
+C     minimum volume and 0.058 of time after it, with the bubble already
+C     well into its rebound.  Cutting the kinetic energy by half there
+C     also freed the step control - DTD = ADFD/(1 + u^2/2 + p_gas) - and
+C     the clock jumped twenty-three fold in a single step.
+C
+C     The jump is therefore taken at the minimum the rebound detector
+C     already finds, and the reconnection is left to do only what it is
+C     for: releasing the ring.  DONE also guards a restart that begins
+C     after the minimum, where the jump belongs to an earlier generation.
+      LOGICAL ENERGY_JUMP_DONE,ENERGY_JUMP_PENDING
 C     The jump is also held under the energy the bubble began with.  The
 C     surgeries only ever remove liquid, gas and circulation, so they
 C     cannot leave the surface with more energy than the parent had, and
@@ -495,6 +530,9 @@ CSAL      READ(39,*)EMST,TST,EKST,RMB,MMB
       HAVE_DVDT=.FALSE.
       REBOUND_CANDIDATE=.FALSE.
       REBOUND_CONFIRMED=.FALSE.
+      ENERGY_JUMP_DONE=.FALSE.
+      ENERGY_JUMP_PENDING=.FALSE.
+      VMIN_SEEN=1.0D100
       STOP_AFTER_REBOUND=.FALSE.
       REDISTRIBUTION_PENDING=.FALSE.
       INQUIRE(FILE='PRECONTACT_RESTART.dat',EXIST=SECOND_SPLIT_RESTART)
@@ -697,7 +735,7 @@ C=======================================================================
      &SPLIT_VOLUME_BEFORE,SPLIT_CENTROID_BEFORE,DVDT_RESTART,
      &SPLIT_VOLUME_AFTER,SPLIT_CENTROID_AFTER,VCOMP,CCOMP,
      &QRECOMP_COMP,QCLOSURE_COMP,MESH_RATIO_COMP,
-     &RING_DMIN_COMP,RING_ETA_COMP,IFAIL)
+     &RING_DMIN_COMP,RING_ETA_COMP,IJUMPDONE,IFAIL)
       IF (IFAIL.NE.0) THEN
       WRITE(*,*)'FAILED TO INITIALIZE VALIDATED TWO-DAUGHTER SPLIT',
      &' IFAIL=',IFAIL
@@ -737,6 +775,13 @@ C=======================================================================
       HAVE_POST_VOLUME=.TRUE.
       HAVE_DVDT=.TRUE.
       DVDT_PREV=DVDT_RESTART
+C     Whether the jump has already been made for this collapse travels in
+C     the checkpoint.  Deriving it from the sign of dV/dt instead does not
+C     work: around the minimum the volume wobbles by several per cent as
+C     the loop splits and coalesces, so a generation can restart on a
+C     rising volume and still hold the smallest volume of the whole chain.
+      IF (IJUMPDONE.NE.0) ENERGY_JUMP_DONE=.TRUE.
+      VMIN_SEEN=SPLIT_VOLUME_AFTER
       VOLUME_PREV_ACCEPTED=VOLT
       TIME_PREV_ACCEPTED=DTIME
       SPLIT_REL_VOLUME=(SPLIT_VOLUME_AFTER-SPLIT_VOLUME_BEFORE)/
@@ -1156,18 +1201,94 @@ C     Energy trace of the simply connected phases - the parent's
 C     collapse and the rebound after the hole closes.  It is what says
 C     whether the jump held: past the jump the total should stay flat at
 C     the level it was set to, and well under the parent's own energy.
-      IF (ILS.EQ.1.AND.BUBBLE_TOPOLOGY.EQ.PRE_IMPACT) THEN
+      IF (ILS.EQ.1) THEN
+      IF (BUBBLE_TOPOLOGY.EQ.PRE_IMPACT) THEN
       DO 2650 J=1,M
       PHI_WORK(J)=FID(J)
       PHIN_WORK(J)=PSI(J)
  2650 CONTINUE
+      ELSE
+C     Same surface integral, on the total potential and its total normal
+C     derivative.  Traced through the toroidal and daughter phases too so
+C     that the energy can be followed across the transition and the
+C     surgeries, and not only on the simply connected stretches.
+      DO 2655 J=1,M
+      PHI_WORK(J)=QTOTAL(J)
+      PHIN_WORK(J)=PSI(J)+UVR(J)*DZDXI(J)-VVR(J)*DRDXI(J)
+ 2655 CONTINUE
+      ENDIF
       CALL SURFACE_KINETIC_ENERGY(RR,ZZ,DRDXI,DZDXI,PHI_WORK,
      &PHIN_WORK,DL,M,ENERGY_VCHECK,ENERGY_TKIN)
       ENERGY_PGAS=EPS*(VOLI/VOLT)**POLYEXP
       ENERGY_EPOT=VOLT+ENERGY_PGAS*VOLT/(POLYEXP-1.0D0)
       ENERGY_TOTAL=ENERGY_TKIN+ENERGY_EPOT
       WRITE(347,*)K-1,POST_STEPS,DTIME,VOLT,ENERGY_TKIN,ENERGY_EPOT,
-     &ENERGY_TOTAL,ENERGY_TOTAL/ENERGY_REF
+     &ENERGY_TOTAL,ENERGY_TOTAL/ENERGY_REF,BUBBLE_TOPOLOGY
+      CALL FLUSH(347)
+      ENDIF
+C=======================================================================
+C     ENERGY JUMP AT THE COLLAPSE MINIMUM
+C
+C     Lind and Phillips put a discontinuous jump in the potential at the
+C     minimum-volume instant, standing for the energy the collapse
+C     radiates away as a shock.  The rebound detector above has just
+C     confirmed that instant, so it is taken here, on the accepted state,
+C     before the step is advanced.
+C
+C     The kinetic energy is quadratic in the potential, so the jump is a
+C     single factor on it.  The potential the surface carries is the
+C     remainder FID plus the ring's own, and the ring's is linear in its
+C     circulation, so scaling both by the same factor scales the whole
+C     field - and with it the jump in potential around each loop, which
+C     is what the circulation is.  Everything else the solver needs is
+C     rebuilt from those two at the next pass.
+C=======================================================================
+      IF (ILS.EQ.1.AND.ENERGY_JUMP_PENDING.AND.
+     &BUBBLE_TOPOLOGY.NE.PRE_IMPACT) THEN
+      DO 2690 J=1,M
+      PHI_WORK(J)=QTOTAL(J)
+      PHIN_WORK(J)=PSI(J)+UVR(J)*DZDXI(J)-VVR(J)*DRDXI(J)
+ 2690 CONTINUE
+      CALL SURFACE_KINETIC_ENERGY(RR,ZZ,DRDXI,DZDXI,PHI_WORK,
+     &PHIN_WORK,DL,M,ENERGY_VCHECK,ENERGY_TKIN)
+      ENERGY_PGAS=EPS*(VOLI/VOLT)**POLYEXP
+      ENERGY_EPOT=VOLT+ENERGY_PGAS*VOLT/(POLYEXP-1.0D0)
+      ENERGY_TOTAL=ENERGY_TKIN+ENERGY_EPOT
+      ENERGY_BEFORE_JUMP=ENERGY_TOTAL
+C     What the rebound keeps: the measured energy less the radiated
+C     share, and never more than the parent bubble ever had.
+      ENERGY_TARGET=ENERGY_RETAINED*DMIN1(ENERGY_TOTAL,ENERGY_REF)
+      ENERGY_TKEEP=ENERGY_TARGET-ENERGY_EPOT
+      IF (ENERGY_TKEEP.LT.0.0D0) ENERGY_TKEEP=0.0D0
+      ENERGY_LAMBDA=1.0D0
+      IF (ENERGY_TKIN.GT.1.0D-30) THEN
+      ENERGY_LAMBDA=DSQRT(ENERGY_TKEEP/ENERGY_TKIN)
+      ENDIF
+      IF (ENERGY_LAMBDA.GT.1.0D0) ENERGY_LAMBDA=1.0D0
+      DO 2691 J=1,M
+      FID(J)=ENERGY_LAMBDA*FID(J)
+ 2691 CONTINUE
+      IF (BUBBLE_TOPOLOGY.EQ.TOROIDAL) THEN
+      CIRC_VR=ENERGY_LAMBDA*CIRC_VR
+      ELSE
+      DO 2692 IC=1,NVR
+      GAMMAD(IC)=ENERGY_LAMBDA*GAMMAD(IC)
+ 2692 CONTINUE
+      ENDIF
+      ENERGY_TOTAL=ENERGY_LAMBDA*ENERGY_LAMBDA*ENERGY_TKIN+ENERGY_EPOT
+      WRITE(346,*)'MINIMUM',K-1,POST_STEPS,DTIME,VOLT,ENERGY_TKIN,
+     &ENERGY_EPOT,ENERGY_BEFORE_JUMP,ENERGY_REF,ENERGY_TOTAL,
+     &ENERGY_LAMBDA
+      CALL FLUSH(346)
+      WRITE(*,*)'ENERGY JUMP AT THE MINIMUM: E=',ENERGY_BEFORE_JUMP,
+     &' -> ',ENERGY_TOTAL,' LAMBDA=',ENERGY_LAMBDA
+      WRITE(*,*)'APPLIED AT T=',DTIME,' V=',VOLT,
+     &' SMALLEST VOLUME SEEN=',VMIN_SEEN
+      ENERGY_JUMP_PENDING=.FALSE.
+      ENERGY_JUMP_DONE=.TRUE.
+      VOLUME_PREV_ACCEPTED=VOLT
+      TIME_PREV_ACCEPTED=DTIME
+      GO TO 821
       ENDIF
 C=======================================================================
 C     TOROIDAL PANEL REDISTRIBUTION
@@ -1374,22 +1495,25 @@ C     Total potential at the nodes before the ring is released.
  2620 CONTINUE
       GAM_AXIS=GAMMAD(1)
 C=======================================================================
-C     ENERGY JUMP AT THE COLLAPSE-REBOUND
+C     ENERGY ACROSS THE RECONNECTION
 C
-C     The hole closing onto the axis is the minimum-volume instant of
-C     this collapse: the bubble stops contracting here and rebounds as a
-C     simply connected surface.  That is where Lind and Phillips apply
-C     the discontinuous jump in the potential which stands for the
-C     energy radiated away as a shock, and it is applied here, on the
-C     potential the reconnection hands to the rebound.
+C     The jump that stands for the radiated shock is applied at the
+C     minimum-volume instant, which the block beside ENERGY_JUMP_PENDING
+C     above takes care of.  It is not applied here: the hole closing onto
+C     the axis is a topology event, not the minimum, and by the time it
+C     happens the bubble has been rebounding for a long while.
 C
-C     The energy is measured on the surface as it stands, before the
-C     surgery: the kinetic energy of the liquid follows from the
+C     The energy is still measured on the surface as it stands, before
+C     the surgery, so the diagnostics show what the reconnection was
+C     handed.  The kinetic energy of the liquid follows from the
 C     potential and its normal derivative on the bubble alone, because
 C     the rigid wall carries no flux and the axis has no area.  The
-C     vortex ring's own share of the energy is not counted, which is
-C     correct here - the ring is released by this surgery and its energy
-C     leaves with it.
+C     vortex ring's own share is not counted, which is correct here - the
+C     ring is released by this surgery and its energy leaves with it.
+C
+C     ENERGY_LAMBDA is left at one unless no jump has been applied for
+C     this collapse at all, which can only happen if the run never saw
+C     its minimum; then the old behaviour stands as a backstop.
 C=======================================================================
       DO 2700 J=1,M
       PHI_WORK(J)=QTOTAL(J)
@@ -1413,6 +1537,7 @@ C     single factor on it.  It can only ever remove energy.
       ENERGY_LAMBDA=DSQRT(ENERGY_TKEEP/ENERGY_TKIN)
       ENDIF
       IF (ENERGY_LAMBDA.GT.1.0D0) ENERGY_LAMBDA=1.0D0
+      IF (ENERGY_JUMP_DONE) ENERGY_LAMBDA=1.0D0
       CALL RECONNECT_ON_AXIS(R,Z,QOLD_AXIS,GAM_AXIS,ISTART(1),
      &IEND(1),RARC,ZARC,QARC,NARC,ZPINCH,IFAIL)
       IF (IFAIL.NE.0) THEN
@@ -1424,11 +1549,19 @@ C     single factor on it.  It can only ever remove energy.
       QARC(KA)=ENERGY_LAMBDA*QARC(KA)
  2701 CONTINUE
       ENERGY_TOTAL=ENERGY_LAMBDA*ENERGY_LAMBDA*ENERGY_TKIN+ENERGY_EPOT
-      WRITE(346,*)'REBOUND',K-1,POST_STEPS,DTIME,VOLT,ENERGY_TKIN,
+      WRITE(346,*)'RECONNECT',K-1,POST_STEPS,DTIME,VOLT,ENERGY_TKIN,
      &ENERGY_EPOT,ENERGY_BEFORE_JUMP,ENERGY_REF,ENERGY_TOTAL,
      &ENERGY_LAMBDA
-      WRITE(*,*)'ENERGY JUMP AT REBOUND: E=',ENERGY_BEFORE_JUMP,
-     &' -> ',ENERGY_TOTAL,' LAMBDA=',ENERGY_LAMBDA
+      CALL FLUSH(346)
+      IF (ENERGY_JUMP_DONE) THEN
+      WRITE(*,*)'RECONNECTION ENERGY (NO JUMP HERE): E=',
+     &ENERGY_BEFORE_JUMP,' REF=',ENERGY_REF
+      ELSE
+      WRITE(*,*)'NO MINIMUM WAS SEEN; JUMP APPLIED AT THE',
+     &' RECONNECTION: E=',ENERGY_BEFORE_JUMP,' -> ',ENERGY_TOTAL,
+     &' LAMBDA=',ENERGY_LAMBDA
+      ENERGY_JUMP_DONE=.TRUE.
+      ENDIF
       DO 2621 KA=1,NARC
       R(KA)=RARC(KA)
       Z(KA)=ZARC(KA)
@@ -1594,7 +1727,7 @@ C=======================================================================
      &QVR,QVR_NODE,QREM,QREM_NODE,QTOTAL,MCOMP,ISTART,IEND,
      &COMP_OF_PANEL,NEXT_NODE,AVRD,CVRD,GAMMAD,
      &PAIR_JA,PAIR_FA,PAIR_JB,PAIR_FB,MMERGE,
-     &MMNEW,GAMMERGE,AREAMB,VOLMAFT,IFAIL)
+     &MMNEW,GAMMERGE,GAMSAMP,SGNUSE,QREMPER,AREAMB,VOLMAFT,IFAIL)
       IF (IFAIL.NE.0) THEN
       WRITE(*,*)'FAILED TO MERGE COMPONENTS IFAIL=',IFAIL
       STOP
@@ -1640,8 +1773,15 @@ C     volume is the sum of theirs at the same reference pressure.
      &PAIR_RATIO
       WRITE(342,*)'# LOCATION',0.5D0*(PAIR_RA+PAIR_RB),
      &0.5D0*(PAIR_ZA+PAIR_ZB)
-      WRITE(342,*)'# GAMMA1 GAMMA2 SUM MERGED RESIDUAL',
-     &GAM1,GAM2,GAM1+GAM2,GAMMERGE,GAMMERGE-(GAM1+GAM2)
+C     The traversal direction of the second arc decides the sign it
+C     brings, so the sum it is held against is the directed one.
+      WRITE(342,*)'# GAMMA1 GAMMA2 DIRECTED_SUM MERGED RESIDUAL',
+     &GAM1,GAM2,GAM1+SGNUSE*GAM2,GAMMERGE,
+     &GAMMERGE-(GAM1+SGNUSE*GAM2)
+      WRITE(342,*)'# SECOND_ARC_DIRECTION',SGNUSE
+      WRITE(342,*)'# GAMMA_FROM_SAMPLES SECOND_BRIDGE_JUMP',
+     &GAMSAMP,GAMMERGE-GAMSAMP
+      WRITE(342,*)'# QREM_CLOSING_STEP_OVER_TYPICAL',QREMPER
       WRITE(342,*)'# VOLUME_BEFORE AFTER RELATIVE',VOLMBEF,
      &VOLT,(VOLT-VOLMBEF)/VOLMBEF
       WRITE(342,*)'# PANELS',MMERGE
@@ -1926,6 +2066,8 @@ C     is already fast is captured on the spot.
       IF (ICAPT.EQ.1) THEN
       DVDT_CHECKPOINT=0.0D0
       IF (HAVE_DVDT) DVDT_CHECKPOINT=DVDT_PREV
+      IJUMPDONE=0
+      IF (ENERGY_JUMP_DONE) IJUMPDONE=1
       CALL WRITE_PRECONTACT_CHECKPOINT(328,329,K-1,POST_STEPS,DTIME,
      &R,Z,RR,ZZ,FID,PSI,DL,DLM,AR,BR,CR,DR,AZ,BZ,CZ,DZ,
      &AFI,BFI,CFI,DFI,XCQ,APSI,BPSI,CPSI,DPSI,XCP,
@@ -1933,7 +2075,7 @@ C     is already fast is captured on the spot.
      &DVDT_CHECKPOINT,
      &CONTACT_DMIN,CONTACT_HLOCAL,CONTACT_JA,CONTACT_JB,
      &CONTACT_FA,CONTACT_FB,CONTACT_RA,CONTACT_ZA,CONTACT_RB,
-     &CONTACT_ZB,CONTACT_CLOSING,M,IFAIL)
+     &CONTACT_ZB,CONTACT_CLOSING,IJUMPDONE,M,IFAIL)
       IF (IFAIL.NE.0) THEN
       WRITE(*,*)'FAILED TO WRITE FULL-PRECISION PRECONTACT CHECKPOINT'
       STOP
@@ -2425,6 +2567,7 @@ C     copy of node 1, so panel M is the physical closing panel.
       QREM_NODE(M+1)=QCLOSE
       REMJUMP=DABS(QREM_NODE(M+1)-QREM_NODE(1))
       BUBBLE_TOPOLOGY=TOROIDAL
+      VMIN_SEEN=VOLT
       NVR=1
       CALL REBUILD_TOROIDAL_GEOMETRY(R,Z,DL,DLM,AR,BR,CR,DR,
      &AZ,BZ,CZ,DZ,RR,ZZ,M,IFAIL)
@@ -2810,6 +2953,16 @@ CSAL 171  FORMAT(1X,F12.5,5X,F12.5)
       ENDIF
       WRITE(*,*)'POST-COLLAPSE ACCEPTED STEP',POST_STEPS,
      &' TIME=',DTIME,' VOLUME=',VOLT
+C     The collapse minimum, tracked on accepted volumes alone.  Once the
+C     bubble stands clear of the smallest volume it has reached, the turn
+C     has happened and the jump is armed for the next solve.
+      IF (VOLT.LT.VMIN_SEEN) VMIN_SEEN=VOLT
+      IF (.NOT.ENERGY_JUMP_DONE.AND..NOT.ENERGY_JUMP_PENDING.AND.
+     &VOLT.GT.ENERGY_JUMP_RISE*VMIN_SEEN) THEN
+      ENERGY_JUMP_PENDING=.TRUE.
+      WRITE(*,*)'COLLAPSE MINIMUM PASSED: V=',VOLT,' MINIMUM SEEN=',
+     &VMIN_SEEN
+      ENDIF
 C
 C     Rebound detection uses corrected, accepted volumes only.  Five
 C     consecutive positive increments establish the first rebound.
@@ -4385,7 +4538,7 @@ C=======================================================================
      &AR,BR,CR,DR,AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,
      &QVR,QVRN,QREM,QREMN,QTOTAL,MCOMP,ISTART,IEND,COMP_OF_PANEL,
      &NEXT_NODE,AVRD,CVRD,GAMMAD,JA,FA,JB,FB,MMERGE,
-     &MNEW,GAMMERGE,VOLBEF,VOLAFT,IFAIL)
+     &MNEW,GAMMERGE,GAMSAMP,SGNUSE,QREMPER,VOLBEF,VOLAFT,IFAIL)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NPA=600,MAXCOMP=2,MAXVR=2)
       INTEGER COMP_OF_PANEL(NPA),NEXT_NODE(NPA)
@@ -4509,6 +4662,7 @@ C     Second arc, walked in whichever direction is under test.
       TARGET=AREA1+AREA2
       IF (DABS(AREAM-TARGET).LT.0.25D0*DABS(TARGET)) THEN
       IBEST=IDIR
+      SGNUSE=SGN
       DO 60 K=1,MMERGE
       RB(K)=RM(K)
       ZB(K)=ZM(K)
@@ -4522,13 +4676,60 @@ C     Second arc, walked in whichever direction is under test.
       IFAIL=8
       RETURN
       ENDIF
-C     Make the potential continuous across the first bridge.  The jump
-C     left at the second bridge is then GAMMA1+GAMMA2 by construction.
+C=======================================================================
+C     THE POTENTIAL AND THE CIRCULATION OF THE MERGED LOOP
+C
+C     The potential is made continuous across the first bridge by adding
+C     one constant to the second arc, which leaves the whole jump at the
+C     second bridge.  That shift is not free - the kinetic energy is
+C     -1/2 * integral phi dphi/dn dS and the surface flux is dV/dt, so a
+C     constant c on half the surface moves the measured energy by about
+C     -c/2 * dV/dt - and here c is of order the circulation, which is why
+C     a coalescence appears to multiply the energy several-fold while the
+C     surface speed halves.
+C
+C     Leaving both arcs at their own levels was tried and does not work.
+C     Going once round the merged loop must accumulate the circulation,
+C     and it is this shift that carries it into the sampled arc: without
+C     it the arc carried -0.90 of a circulation of -4.20 and the missing
+C     -3.30 sat in the closing panel, leaving QREM - the total potential
+C     less the ring's - with a step there twenty times a typical one.
+C     The periodic spline the solver fits to QREM would then be fitting a
+C     function with a break in it, which is worse than the level shift.
+C     Spreading the step over a few panels instead of removing it does
+C     not help either: spreading preserves the accumulated change, and
+C     the accumulated change is what is wrong.
+C
+C     So the shift stands.  What the two loops' potentials differ by
+C     where they touch is the potential difference across the film that
+C     has just ruptured, and reconciling it is what a coalescence has to
+C     do; whether the energy that goes with it is physical or an artefact
+C     of splicing rather than re-solving is not settled here.
+C
+C     The circulation, though, is Kelvin's and not a measurement: a
+C     circuit of the merged loop is a circuit of the first followed by a
+C     circuit of the second, taken in whichever direction the second was
+C     walked.  It used to be read off as QB(MMERGE)-QB(1), which is not
+C     the same number - half a panel is trimmed from each loop at each
+C     bridge, so the sampled arc carries only (1-1/N) of each jump - and
+C     across the continuation the two disagreed by four to a hundred and
+C     twenty per cent.  The sampled potential is re-based, linearly in
+C     index so that it stays continuous, until its jump around the loop
+C     is exactly the circulation.  What is left is then periodic and the
+C     ring carries the rest.
+C=======================================================================
       OFFSET=QB(NM1)-QB(NM1+1)
       DO 120 K=NM1+1,MMERGE
       QB(K)=QB(K)+OFFSET
   120 CONTINUE
-      GAMMERGE=QB(MMERGE)-QB(1)
+      GAMMERGE=GAMMAD(1)+SGNUSE*GAMMAD(2)
+      GAMSAMP=QB(MMERGE)-QB(1)
+      GAMFIX=GAMMERGE-GAMSAMP
+      IF (MMERGE.GT.1) THEN
+      DO 125 K=1,MMERGE
+      QB(K)=QB(K)+GAMFIX*DBLE(K-1)/DBLE(MMERGE-1)
+  125 CONTINUE
+      ENDIF
       DO 130 K=1,MMERGE
       R(K)=RB(K)
       Z(K)=ZB(K)
@@ -4578,6 +4779,19 @@ C     left at the second bridge is then GAMMA1+GAMMA2 by construction.
       DO 160 J=1,MNEW
       QREMN(J)=QOLDN(J)-QVRN(J)
   160 CONTINUE
+C     Is what is left actually periodic?  QREM is the total potential
+C     less the ring's, and the periodic spline the solver fits to it
+C     assumes it closes on itself.  The step across the closing panel is
+C     measured against the typical step between neighbours: about one
+C     means the closing panel looks like any other and the circulation
+C     taken out was the right one, much more than one means it did not.
+      QSTEP=0.0D0
+      DO 165 J=1,MNEW-1
+      QSTEP=QSTEP+DABS(QREMN(J+1)-QREMN(J))
+  165 CONTINUE
+      QSTEP=QSTEP/DBLE(MNEW-1)
+      QREMPER=DABS(QREMN(1)-QREMN(MNEW))
+      IF (QSTEP.GT.1.0D-30) QREMPER=QREMPER/QSTEP
       QREMN(MNEW+1)=QREMN(1)
       QVRN(MNEW+1)=QVRN(1)
       CALL BUILD_COMPONENT_NODE_FIELD_TO_CENTERS(QREMN,DL,DLM,FID,
@@ -5452,7 +5666,7 @@ C     then packed into the one globally coupled BEM source list.
      &COMP_OF_PANEL,NEXT_NODE,AVRD,CVRD,GAMMAD,GAMMA_PARENT,KRES,
      &NPRES,
      &SPLIT_TIME,VOLBEF,CENBEF,DVDT,VOLAFT,CENAFT,VCOMP,CCOMP,
-     &QRECOMP,QCLOSURE,MESHRATIO,RDMIN,RETA,IFAIL)
+     &QRECOMP,QCLOSURE,MESHRATIO,RDMIN,RETA,IJUMPDONE,IFAIL)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NPA=600,MAXCOMP=2,MAXVR=2)
 C     A daughter holding at most this share of the volume at the split is
@@ -5493,6 +5707,7 @@ C     part of the flow and is kept and evolved as a second component.
       VOLBEF=-1.0D0
       CENBEF=0.0D0
       DVDT=0.0D0
+      IJUMPDONE=0
       FA=-1.0D0
       FB=-1.0D0
       QA=0.0D0
@@ -5523,6 +5738,11 @@ C     part of the flow and is kept and evolved as a second component.
       IP=INDEX(LINE,'# VOLUME V_OVER_V0 CENTROID DVDT')
       IF (IP.GT.0) READ(LINE(IP+32:),*,IOSTAT=IOS2)
      &VOLBEF,VDUM,CENBEF,DVDT
+C     Absent from a checkpoint written before the jump was moved to the
+C     minimum, and zero is the right reading of that: those runs made no
+C     jump at the minimum either.
+      IP=INDEX(LINE,'# ENERGY_JUMP_DONE')
+      IF (IP.GT.0) READ(LINE(IP+18:),*,IOSTAT=IOS2) IJUMPDONE
       IP=INDEX(LINE,'# RING1_A C CIRCULATION')
       IF (IP.GT.0) READ(LINE(IP+23:),*,IOSTAT=IOS2)
      &APARENT,CPARENT,GPARENT_FILE
@@ -6718,7 +6938,7 @@ C=======================================================================
      &IPOST,TIME,R,Z,RR,ZZ,FID,PSI,DL,DLM,AR,BR,CR,DR,
      &AZ,BZ,CZ,DZ,AFI,BFI,CFI,DFI,XQ,APSI,BPSI,CPSI,DPSI,XP,
      &A,C,CIRC,QVR,QVRN,VOLUME,VOL0,CENTROID,DVDT,DMIN,HLOCAL,
-     &JA,JB,FA,FB,RA,ZA,RB,ZB,CLOSING,M,IFAIL)
+     &JA,JB,FA,FB,RA,ZA,RB,ZB,CLOSING,IJUMPDONE,M,IFAIL)
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       PARAMETER (NPA=600)
       DIMENSION R(NPA),Z(NPA),RR(NPA),ZZ(NPA),FID(NPA),PSI(NPA)
@@ -6807,6 +7027,10 @@ C=======================================================================
       WRITE(IUNIT,*)'# NORMAL_CLOSING_SPEED',CLOSING
       WRITE(IUNIT,*)'# VOLUME V_OVER_V0 CENTROID DVDT',VOLUME,
      &VOLUME/VOL0,CENTROID,DVDT
+C     Whether the jump that stands for the radiated shock has already been
+C     made for this collapse.  The generation that restarts from here must
+C     not make it a second time, and cannot tell from the volume alone.
+      WRITE(IUNIT,*)'# ENERGY_JUMP_DONE',IJUMPDONE
       WRITE(IUNIT,*)'# RING1_A C CIRCULATION',A,C,CIRC
       WRITE(IUNIT,*)'# SIGNED_RZ_AREA',SIGNED_AREA
       IF (SIGNED_AREA.LT.0.0D0) THEN
